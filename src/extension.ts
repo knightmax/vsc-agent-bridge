@@ -321,7 +321,7 @@ function createServer(authToken: string): http.Server {
     // ----- Auth check -----
     const token = req.headers["x-auth-token"];
     if (token !== authToken) {
-      sendJson(res, 401, { error: "Unauthorized – invalid or missing x-auth-token header." });
+      sendJson(res, 401, { error: "Unauthorized - invalid or missing x-auth-token header." });
       return;
     }
 
@@ -401,7 +401,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const message = `Agent Bridge server listening on http://127.0.0.1:${port}`;
     vscode.window.showInformationMessage(message);
     console.log(message);
-    console.log(`Auth token: ${authToken}`);
+    // Token is available via the "Agent Bridge: Copy Auth Token to Clipboard" command.
+    // It is intentionally NOT logged to avoid accidental exposure.
   });
 
   server.on("error", (err: NodeJS.ErrnoException) => {
@@ -411,7 +412,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     } else {
       vscode.window.showErrorMessage(
-        `Agent Bridge: failed to start server – ${err.message}`,
+        `Agent Bridge: failed to start server - ${err.message}`,
       );
     }
   });
