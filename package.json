@@ -1,0 +1,60 @@
+{
+  "name": "vsc-agent-bridge",
+  "displayName": "VS Code Agent Bridge",
+  "description": "A local HTTP server extension that exposes VS Code Language Server features (diagnostics, hover, definitions) as REST endpoints for AI assistants.",
+  "version": "0.1.0",
+  "publisher": "knightmax",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knightmax/vsc-agent-bridge"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:java",
+    "workspaceContains:**/*.java"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscAgentBridge.showAuthToken",
+        "title": "Agent Bridge: Copy Auth Token to Clipboard"
+      }
+    ],
+    "configuration": {
+      "title": "VS Code Agent Bridge",
+      "properties": {
+        "vscAgentBridge.port": {
+          "type": "number",
+          "default": 3003,
+          "description": "Port number for the local HTTP server."
+        },
+        "vscAgentBridge.authToken": {
+          "type": "string",
+          "default": "",
+          "description": "Static token used to authenticate requests. If empty, a random token is generated on activation."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.0"
+  }
+}
