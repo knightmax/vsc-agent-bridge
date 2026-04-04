@@ -2,65 +2,20 @@ import * as vscode from "vscode";
 import * as http from "http";
 import * as crypto from "crypto";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface PositionParams {
-  file: string;
-  line: number;
-  character: number;
-}
-
-interface DiagnosticResponse {
-  file: string;
-  diagnostics: SerializedDiagnostic[];
-}
-
-interface SerializedDiagnostic {
-  range: {
-    start: { line: number; character: number };
-    end: { line: number; character: number };
-  };
-  message: string;
-  severity: string;
-  source: string | undefined;
-  code: string | number | undefined;
-}
-
-interface DefinitionLocationResponse {
-  uri: string;
-  range: {
-    start: { line: number; character: number };
-    end: { line: number; character: number };
-  };
-}
-
-interface HoverContentResponse {
-  contents: string[];
-}
+import {
+  type DiagnosticResponse,
+  type DefinitionLocationResponse,
+  type HoverContentResponse,
+  type SerializedDiagnostic,
+  severityToString,
+  readBody,
+  sendJson,
+  parsePositionParams,
+} from "./helpers";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Serialization (depends on vscode types)
 // ---------------------------------------------------------------------------
-
-/**
- * Map VS Code DiagnosticSeverity enum to a human-readable string.
- */
-function severityToString(severity: vscode.DiagnosticSeverity): string {
-  switch (severity) {
-    case vscode.DiagnosticSeverity.Error:
-      return "error";
-    case vscode.DiagnosticSeverity.Warning:
-      return "warning";
-    case vscode.DiagnosticSeverity.Information:
-      return "information";
-    case vscode.DiagnosticSeverity.Hint:
-      return "hint";
-    default:
-      return "unknown";
-  }
-}
 
 /**
  * Serialize a VS Code Diagnostic into a plain JSON-safe object.
@@ -83,68 +38,6 @@ function serializeDiagnostic(d: vscode.Diagnostic): SerializedDiagnostic {
   };
 }
 
-/**
- * Read the full body of an incoming HTTP request as a string.
- */
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
-  });
-}
-
-/**
- * Send a JSON response.
- */
-function sendJson(
-  res: http.ServerResponse,
-  statusCode: number,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  body: any,
-): void {
-  res.writeHead(statusCode, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
-/**
- * Parse and validate the required position parameters from a JSON body.
- */
-function parsePositionParams(
-  raw: string,
-): { ok: true; params: PositionParams } | { ok: false; error: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { ok: false, error: "Invalid JSON body." };
-  }
-
-  const obj = parsed as Record<string, unknown>;
-  if (typeof obj.file !== "string" || obj.file.length === 0) {
-    return { ok: false, error: "'file' (string) is required." };
-  }
-  if (typeof obj.line !== "number" || obj.line < 0) {
-    return { ok: false, error: "'line' (non-negative number) is required." };
-  }
-  if (typeof obj.character !== "number" || obj.character < 0) {
-    return {
-      ok: false,
-      error: "'character' (non-negative number) is required.",
-    };
-  }
-
-  return {
-    ok: true,
-    params: {
-      file: obj.file as string,
-      line: obj.line as number,
-      character: obj.character as number,
-    },
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -152,13 +45,10 @@ function parsePositionParams(
 /**
  * GET /diagnostics
  *
- * Optional query parameter: `file` – absolute path to restrict diagnostics to
+ * Optional query parameter: `file` - absolute path to restrict diagnostics to
  * a single file.  When omitted, returns diagnostics for the entire workspace.
  */
-function handleGetDiagnostics(
-  url: URL,
-  res: http.ServerResponse,
-): void {
+function handleGetDiagnostics(url: URL, res: http.ServerResponse): void {
   const fileFilter = url.searchParams.get("file");
 
   const allDiagnostics = vscode.languages.getDiagnostics();
@@ -316,12 +206,14 @@ function handleGetActiveFileContent(res: http.ServerResponse): void {
 // Server factory
 // ---------------------------------------------------------------------------
 
-function createServer(authToken: string): http.Server {
+export function createServer(authToken: string): http.Server {
   const server = http.createServer(async (req, res) => {
     // ----- Auth check -----
     const token = req.headers["x-auth-token"];
     if (token !== authToken) {
-      sendJson(res, 401, { error: "Unauthorized - invalid or missing x-auth-token header." });
+      sendJson(res, 401, {
+        error: "Unauthorized - invalid or missing x-auth-token header.",
+      });
       return;
     }
 
