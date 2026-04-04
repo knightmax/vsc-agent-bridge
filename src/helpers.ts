@@ -85,6 +85,89 @@ export interface FileParams {
   file: string;
 }
 
+export interface WorkspaceSymbolParams {
+  query: string;
+}
+
+export interface WorkspaceSymbolResponse {
+  name: string;
+  kind: string;
+  containerName: string;
+  location: {
+    uri: string;
+    range: {
+      start: { line: number; character: number };
+      end: { line: number; character: number };
+    };
+  };
+}
+
+export interface CallHierarchyItemResponse {
+  name: string;
+  kind: string;
+  uri: string;
+  range: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  };
+  selectionRange: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  };
+}
+
+export interface CallHierarchyCallResponse {
+  from: CallHierarchyItemResponse;
+  fromRanges: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  }[];
+}
+
+export interface CallHierarchyOutgoingCallResponse {
+  to: CallHierarchyItemResponse;
+  fromRanges: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  }[];
+}
+
+export interface TypeHierarchyItemResponse {
+  name: string;
+  kind: string;
+  uri: string;
+  range: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  };
+  selectionRange: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  };
+}
+
+export interface CompletionItemResponse {
+  label: string;
+  kind: string;
+  detail: string | undefined;
+  documentation: string | undefined;
+  sortText: string | undefined;
+  filterText: string | undefined;
+  insertText: string | undefined;
+}
+
+export interface InlayHintResponse {
+  position: { line: number; character: number };
+  label: string;
+  kind: string | undefined;
+}
+
+export interface FoldingRangeResponse {
+  startLine: number;
+  endLine: number;
+  kind: string | undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -309,4 +392,97 @@ export function parseFileParams(
     ok: true,
     params: { file: obj.file as string },
   };
+}
+
+/**
+ * Parse and validate workspace symbol search parameters from a JSON body.
+ */
+export function parseWorkspaceSymbolParams(
+  raw: string,
+): { ok: true; params: WorkspaceSymbolParams } | { ok: false; error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: "Invalid JSON body." };
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.query !== "string") {
+    return { ok: false, error: "'query' (string) is required." };
+  }
+
+  return {
+    ok: true,
+    params: { query: obj.query as string },
+  };
+}
+
+/**
+ * Map a numeric CompletionItemKind to a human-readable string.
+ * Values match the VS Code CompletionItemKind enum.
+ */
+export function completionItemKindToString(kind: number): string {
+  const kinds: Record<number, string> = {
+    0: "Text",
+    1: "Method",
+    2: "Function",
+    3: "Constructor",
+    4: "Field",
+    5: "Variable",
+    6: "Class",
+    7: "Interface",
+    8: "Module",
+    9: "Property",
+    10: "Unit",
+    11: "Value",
+    12: "Enum",
+    13: "Keyword",
+    14: "Snippet",
+    15: "Color",
+    16: "File",
+    17: "Reference",
+    18: "Folder",
+    19: "EnumMember",
+    20: "Constant",
+    21: "Struct",
+    22: "Event",
+    23: "Operator",
+    24: "TypeParameter",
+    25: "User",
+    26: "Issue",
+  };
+  return kinds[kind] ?? "Unknown";
+}
+
+/**
+ * Map a numeric InlayHintKind to a human-readable string.
+ */
+export function inlayHintKindToString(kind: number | undefined): string | undefined {
+  if (kind === undefined || kind === null) { return undefined; }
+  switch (kind) {
+    case 1:
+      return "Type";
+    case 2:
+      return "Parameter";
+    default:
+      return "Unknown";
+  }
+}
+
+/**
+ * Map a numeric FoldingRangeKind to a human-readable string.
+ */
+export function foldingRangeKindToString(kind: number | undefined): string | undefined {
+  if (kind === undefined || kind === null) { return undefined; }
+  switch (kind) {
+    case 1:
+      return "Comment";
+    case 2:
+      return "Imports";
+    case 3:
+      return "Region";
+    default:
+      return "Unknown";
+  }
 }

@@ -1,8 +1,8 @@
 {
   "name": "vsc-agent-bridge",
   "displayName": "VS Code Agent Bridge",
-  "description": "A local HTTP server extension that exposes VS Code Language Server features (diagnostics, hover, definitions, references, symbols, code actions, and more) as REST endpoints for AI assistants. Works with any language that has an LSP extension installed.",
-  "version": "0.2.0",
+  "description": "A local HTTP server extension that exposes VS Code Language Server features (diagnostics, hover, definitions, declarations, references, symbols, code actions, call hierarchy, type hierarchy, workspace symbols, completion, inlay hints, folding ranges, and more) as REST endpoints for AI assistants. Works with any language that has an LSP extension installed.",
+  "version": "0.3.0",
   "publisher": "knightmax",
   "license": "MIT",
   "repository": {

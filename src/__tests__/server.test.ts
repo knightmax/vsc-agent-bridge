@@ -191,7 +191,7 @@ describe("HTTP server", () => {
     expect(status).toBe(200);
     const obj = body as Record<string, unknown>;
     expect(obj.name).toBe("vsc-agent-bridge");
-    expect(obj.version).toBe("0.2.0");
+    expect(obj.version).toBe("0.3.0");
     expect(Array.isArray(obj.endpoints)).toBe(true);
     const endpoints = obj.endpoints as string[];
     expect(endpoints).toContain("POST /references");
@@ -201,6 +201,13 @@ describe("HTTP server", () => {
     expect(endpoints).toContain("POST /code-actions");
     expect(endpoints).toContain("POST /signature-help");
     expect(endpoints).toContain("POST /rename-preview");
+    expect(endpoints).toContain("POST /declaration");
+    expect(endpoints).toContain("POST /call-hierarchy");
+    expect(endpoints).toContain("POST /type-hierarchy");
+    expect(endpoints).toContain("POST /workspace-symbols");
+    expect(endpoints).toContain("POST /completion");
+    expect(endpoints).toContain("POST /inlay-hints");
+    expect(endpoints).toContain("POST /folding-ranges");
   });
 
   // -- 404 -----------------------------------------------------------------
@@ -463,5 +470,199 @@ describe("HTTP server", () => {
     expect(status).toBe(400);
     const obj = body as Record<string, unknown>;
     expect(obj.error).toMatch(/newName/);
+  });
+
+  // -- POST /declaration (mocked empty) ------------------------------------
+
+  it("POST /declaration returns empty declarations for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/declaration",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.declarations).toEqual([]);
+  });
+
+  it("POST /declaration returns 400 for invalid body", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/declaration",
+      body: "not json",
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/Invalid JSON/);
+  });
+
+  // -- POST /call-hierarchy (mocked empty) ---------------------------------
+
+  it("POST /call-hierarchy returns null item when no hierarchy found", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/call-hierarchy",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.item).toBeNull();
+    expect(obj.incomingCalls).toEqual([]);
+    expect(obj.outgoingCalls).toEqual([]);
+  });
+
+  it("POST /call-hierarchy returns 400 for invalid body", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/call-hierarchy",
+      body: "not json",
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/Invalid JSON/);
+  });
+
+  // -- POST /type-hierarchy (mocked empty) ---------------------------------
+
+  it("POST /type-hierarchy returns null item when no hierarchy found", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/type-hierarchy",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.item).toBeNull();
+    expect(obj.supertypes).toEqual([]);
+    expect(obj.subtypes).toEqual([]);
+  });
+
+  it("POST /type-hierarchy returns 400 for missing fields", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/type-hierarchy",
+      body: JSON.stringify({ file: "/a.java" }),
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/line/);
+  });
+
+  // -- POST /workspace-symbols (mocked empty) ------------------------------
+
+  it("POST /workspace-symbols returns empty symbols for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/workspace-symbols",
+      body: JSON.stringify({ query: "MyClass" }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.symbols).toEqual([]);
+  });
+
+  it("POST /workspace-symbols returns 400 for missing query", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/workspace-symbols",
+      body: JSON.stringify({}),
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/query/);
+  });
+
+  // -- POST /completion (mocked empty) -------------------------------------
+
+  it("POST /completion returns empty items for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/completion",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.items).toEqual([]);
+  });
+
+  it("POST /completion returns 400 for invalid body", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/completion",
+      body: "not json",
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/Invalid JSON/);
+  });
+
+  // -- POST /inlay-hints (mocked empty) ------------------------------------
+
+  it("POST /inlay-hints returns empty hints for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/inlay-hints",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        startLine: 0,
+        startCharacter: 0,
+        endLine: 50,
+        endCharacter: 0,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.hints).toEqual([]);
+  });
+
+  it("POST /inlay-hints returns 400 for missing range fields", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/inlay-hints",
+      body: JSON.stringify({ file: "/a.java", startLine: 0 }),
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/startCharacter/);
+  });
+
+  // -- POST /folding-ranges (mocked empty) ---------------------------------
+
+  it("POST /folding-ranges returns empty ranges for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/folding-ranges",
+      body: JSON.stringify({ file: "/path/to/File.java" }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.ranges).toEqual([]);
+  });
+
+  it("POST /folding-ranges returns 400 for missing file", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/folding-ranges",
+      body: JSON.stringify({}),
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/file/);
   });
 });
