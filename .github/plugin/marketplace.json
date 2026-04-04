@@ -7,7 +7,7 @@
     {
       "name": "vsc-agent-bridge-plugin",
       "source": "./plugins/vsc-agent-bridge-plugin",
-      "description": "A Copilot skill that enables AI assistants to interact with VS Code Language Server features (diagnostics, hover, definitions) via a local HTTP bridge. Use when debugging, investigating compilation errors, or navigating code in Java or other Language Server-enabled projects."
+      "description": "A Copilot skill that enables AI assistants to interact with VS Code Language Server features (diagnostics, definitions, references, symbols, code actions, hover, signature help, rename preview) via a local HTTP bridge. Works with any programming language that has an LSP extension installed."
     }
   ]
 }

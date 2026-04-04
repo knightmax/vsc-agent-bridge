@@ -1,11 +1,12 @@
 name: vsc-agent-bridge-plugin
-version: 1.0.0
-description: A plugin that enables AI assistants to query VS Code Language Server features (diagnostics, definitions, hover, file content) via a local HTTP server. Primarily targets Java debugging but works with any language that has an LSP extension installed.
+version: 2.0.0
+description: A plugin that enables AI assistants to query VS Code Language Server features (diagnostics, definitions, references, hover, symbols, code actions, signature help, rename preview, and more) via a local HTTP server. Works with any language that has an LSP extension installed.
 author: Maximilien CHEVALIER
 tags:
-  - java
   - lsp
-  - debugging
   - diagnostics
+  - code-navigation
+  - refactoring
+  - language-server
 skills:
-  - java-debug-bridge
+  - lsp-bridge
