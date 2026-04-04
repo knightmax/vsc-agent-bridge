@@ -10,14 +10,26 @@ import {
   type DocumentSymbolResponse,
   type CodeActionResponse,
   type SerializedDiagnostic,
+  type WorkspaceSymbolResponse,
+  type CallHierarchyItemResponse,
+  type CallHierarchyCallResponse,
+  type CallHierarchyOutgoingCallResponse,
+  type TypeHierarchyItemResponse,
+  type CompletionItemResponse,
+  type InlayHintResponse,
+  type FoldingRangeResponse,
   severityToString,
   symbolKindToString,
+  completionItemKindToString,
+  inlayHintKindToString,
+  foldingRangeKindToString,
   readBody,
   sendJson,
   parsePositionParams,
   parseRangeParams,
   parseRenameParams,
   parseFileParams,
+  parseWorkspaceSymbolParams,
 } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -618,6 +630,443 @@ async function handlePostRenamePreview(
   sendJson(res, 200, { changes });
 }
 
+/**
+ * POST /declaration
+ *
+ * Body: { "file": "<absolute path>", "line": <number>, "character": <number> }
+ */
+async function handlePostDeclaration(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parsePositionParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  const locations = await vscode.commands.executeCommand<
+    vscode.Location[] | vscode.LocationLink[] | undefined
+  >("vscode.executeDeclarationProvider", uri, position);
+
+  if (!locations || locations.length === 0) {
+    sendJson(res, 200, { declarations: [] });
+    return;
+  }
+
+  const declarations: DefinitionLocationResponse[] = locations.map((loc) => {
+    if ("targetUri" in loc) {
+      return {
+        uri: loc.targetUri.fsPath,
+        range: {
+          start: {
+            line: loc.targetRange.start.line,
+            character: loc.targetRange.start.character,
+          },
+          end: {
+            line: loc.targetRange.end.line,
+            character: loc.targetRange.end.character,
+          },
+        },
+      };
+    }
+    return {
+      uri: loc.uri.fsPath,
+      range: {
+        start: {
+          line: loc.range.start.line,
+          character: loc.range.start.character,
+        },
+        end: {
+          line: loc.range.end.line,
+          character: loc.range.end.character,
+        },
+      },
+    };
+  });
+
+  sendJson(res, 200, { declarations });
+}
+
+/**
+ * Serialize a CallHierarchyItem into a plain JSON-safe object.
+ */
+function serializeCallHierarchyItem(
+  item: vscode.CallHierarchyItem,
+): CallHierarchyItemResponse {
+  return {
+    name: item.name,
+    kind: symbolKindToString(item.kind),
+    uri: item.uri.fsPath,
+    range: {
+      start: {
+        line: item.range.start.line,
+        character: item.range.start.character,
+      },
+      end: {
+        line: item.range.end.line,
+        character: item.range.end.character,
+      },
+    },
+    selectionRange: {
+      start: {
+        line: item.selectionRange.start.line,
+        character: item.selectionRange.start.character,
+      },
+      end: {
+        line: item.selectionRange.end.line,
+        character: item.selectionRange.end.character,
+      },
+    },
+  };
+}
+
+/**
+ * Serialize a range to a plain JSON-safe object.
+ */
+function serializeRange(range: vscode.Range): {
+  start: { line: number; character: number };
+  end: { line: number; character: number };
+} {
+  return {
+    start: { line: range.start.line, character: range.start.character },
+    end: { line: range.end.line, character: range.end.character },
+  };
+}
+
+/**
+ * POST /call-hierarchy
+ *
+ * Body: { "file": "<absolute path>", "line": <number>, "character": <number> }
+ * Returns incoming and outgoing calls for the symbol at the given position.
+ */
+async function handlePostCallHierarchy(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parsePositionParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  // Step 1: Prepare the call hierarchy item(s)
+  const items = await vscode.commands.executeCommand<
+    vscode.CallHierarchyItem[] | undefined
+  >("vscode.prepareCallHierarchy", uri, position);
+
+  if (!items || items.length === 0) {
+    sendJson(res, 200, { item: null, incomingCalls: [], outgoingCalls: [] });
+    return;
+  }
+
+  const item = items[0];
+
+  // Step 2: Get incoming and outgoing calls in parallel
+  const [incomingRaw, outgoingRaw] = await Promise.all([
+    vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[] | undefined>(
+      "vscode.provideIncomingCalls",
+      item,
+    ),
+    vscode.commands.executeCommand<vscode.CallHierarchyOutgoingCall[] | undefined>(
+      "vscode.provideOutgoingCalls",
+      item,
+    ),
+  ]);
+
+  const incomingCalls: CallHierarchyCallResponse[] = (incomingRaw ?? []).map(
+    (call) => ({
+      from: serializeCallHierarchyItem(call.from),
+      fromRanges: call.fromRanges.map(serializeRange),
+    }),
+  );
+
+  const outgoingCalls: CallHierarchyOutgoingCallResponse[] = (outgoingRaw ?? []).map(
+    (call) => ({
+      to: serializeCallHierarchyItem(call.to),
+      fromRanges: call.fromRanges.map(serializeRange),
+    }),
+  );
+
+  sendJson(res, 200, {
+    item: serializeCallHierarchyItem(item),
+    incomingCalls,
+    outgoingCalls,
+  });
+}
+
+/**
+ * POST /type-hierarchy
+ *
+ * Body: { "file": "<absolute path>", "line": <number>, "character": <number> }
+ * Returns subtypes and supertypes for the symbol at the given position.
+ */
+async function handlePostTypeHierarchy(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parsePositionParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  // Step 1: Prepare the type hierarchy item(s)
+  const items = await vscode.commands.executeCommand<
+    vscode.TypeHierarchyItem[] | undefined
+  >("vscode.prepareTypeHierarchy", uri, position);
+
+  if (!items || items.length === 0) {
+    sendJson(res, 200, { item: null, supertypes: [], subtypes: [] });
+    return;
+  }
+
+  const item = items[0];
+
+  // Step 2: Get supertypes and subtypes in parallel
+  const [supertypesRaw, subtypesRaw] = await Promise.all([
+    vscode.commands.executeCommand<vscode.TypeHierarchyItem[] | undefined>(
+      "vscode.provideTypeHierarchySupertypes",
+      item,
+    ),
+    vscode.commands.executeCommand<vscode.TypeHierarchyItem[] | undefined>(
+      "vscode.provideTypeHierarchySubtypes",
+      item,
+    ),
+  ]);
+
+  function serializeTypeHierarchyItem(
+    i: vscode.TypeHierarchyItem,
+  ): TypeHierarchyItemResponse {
+    return {
+      name: i.name,
+      kind: symbolKindToString(i.kind),
+      uri: i.uri.fsPath,
+      range: {
+        start: { line: i.range.start.line, character: i.range.start.character },
+        end: { line: i.range.end.line, character: i.range.end.character },
+      },
+      selectionRange: {
+        start: {
+          line: i.selectionRange.start.line,
+          character: i.selectionRange.start.character,
+        },
+        end: {
+          line: i.selectionRange.end.line,
+          character: i.selectionRange.end.character,
+        },
+      },
+    };
+  }
+
+  sendJson(res, 200, {
+    item: serializeTypeHierarchyItem(item),
+    supertypes: (supertypesRaw ?? []).map(serializeTypeHierarchyItem),
+    subtypes: (subtypesRaw ?? []).map(serializeTypeHierarchyItem),
+  });
+}
+
+/**
+ * POST /workspace-symbols
+ *
+ * Body: { "query": "<search string>" }
+ * Search for symbols across the entire workspace.
+ */
+async function handlePostWorkspaceSymbols(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parseWorkspaceSymbolParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { query } = parsed.params;
+
+  const symbols = await vscode.commands.executeCommand<
+    vscode.SymbolInformation[] | undefined
+  >("vscode.executeWorkspaceSymbolProvider", query);
+
+  if (!symbols || symbols.length === 0) {
+    sendJson(res, 200, { symbols: [] });
+    return;
+  }
+
+  const result: WorkspaceSymbolResponse[] = symbols.map((sym) => ({
+    name: sym.name,
+    kind: symbolKindToString(sym.kind),
+    containerName: sym.containerName ?? "",
+    location: {
+      uri: sym.location.uri.fsPath,
+      range: {
+        start: {
+          line: sym.location.range.start.line,
+          character: sym.location.range.start.character,
+        },
+        end: {
+          line: sym.location.range.end.line,
+          character: sym.location.range.end.character,
+        },
+      },
+    },
+  }));
+
+  sendJson(res, 200, { symbols: result });
+}
+
+/**
+ * POST /completion
+ *
+ * Body: { "file": "<absolute path>", "line": <number>, "character": <number> }
+ * Returns code completion suggestions at the given position.
+ */
+async function handlePostCompletion(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parsePositionParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  const completionResult = await vscode.commands.executeCommand<
+    vscode.CompletionList | vscode.CompletionItem[] | undefined
+  >("vscode.executeCompletionItemProvider", uri, position);
+
+  // The result can be a CompletionList or an array of CompletionItem
+  const completionItems: vscode.CompletionItem[] =
+    !completionResult
+      ? []
+      : Array.isArray(completionResult)
+        ? completionResult
+        : completionResult.items ?? [];
+
+  if (completionItems.length === 0) {
+    sendJson(res, 200, { items: [] });
+    return;
+  }
+
+  const items: CompletionItemResponse[] = completionItems.map((item) => ({
+    label: typeof item.label === "string" ? item.label : item.label.label,
+    kind: completionItemKindToString(item.kind ?? 0),
+    detail: item.detail,
+    documentation:
+      typeof item.documentation === "string"
+        ? item.documentation
+        : item.documentation?.value ?? undefined,
+    sortText: item.sortText,
+    filterText: item.filterText,
+    insertText:
+      typeof item.insertText === "string"
+        ? item.insertText
+        : item.insertText?.value ?? undefined,
+  }));
+
+  sendJson(res, 200, { items });
+}
+
+/**
+ * POST /inlay-hints
+ *
+ * Body: { "file": "<path>", "startLine": N, "startCharacter": N, "endLine": N, "endCharacter": N }
+ * Returns inlay hints (type annotations, parameter names) for the given range.
+ */
+async function handlePostInlayHints(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parseRangeParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, startLine, startCharacter, endLine, endCharacter } =
+    parsed.params;
+  const uri = vscode.Uri.file(file);
+  const range = new vscode.Range(
+    new vscode.Position(startLine, startCharacter),
+    new vscode.Position(endLine, endCharacter),
+  );
+
+  const hints = await vscode.commands.executeCommand<
+    vscode.InlayHint[] | undefined
+  >("vscode.executeInlayHintProvider", uri, range);
+
+  if (!hints || hints.length === 0) {
+    sendJson(res, 200, { hints: [] });
+    return;
+  }
+
+  const result: InlayHintResponse[] = hints.map((hint) => ({
+    position: {
+      line: hint.position.line,
+      character: hint.position.character,
+    },
+    label:
+      typeof hint.label === "string"
+        ? hint.label
+        : hint.label.map((part) => part.value).join(""),
+    kind: inlayHintKindToString(hint.kind),
+  }));
+
+  sendJson(res, 200, { hints: result });
+}
+
+/**
+ * POST /folding-ranges
+ *
+ * Body: { "file": "<absolute path>" }
+ * Returns folding ranges for the given file.
+ */
+async function handlePostFoldingRanges(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parseFileParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const uri = vscode.Uri.file(parsed.params.file);
+
+  const ranges = await vscode.commands.executeCommand<
+    vscode.FoldingRange[] | undefined
+  >("vscode.executeFoldingRangeProvider", uri);
+
+  if (!ranges || ranges.length === 0) {
+    sendJson(res, 200, { ranges: [] });
+    return;
+  }
+
+  const result: FoldingRangeResponse[] = ranges.map((r) => ({
+    startLine: r.start,
+    endLine: r.end,
+    kind: foldingRangeKindToString(r.kind),
+  }));
+
+  sendJson(res, 200, { ranges: result });
+}
+
 // ---------------------------------------------------------------------------
 // Server factory
 // ---------------------------------------------------------------------------
@@ -702,14 +1151,57 @@ export function createServer(authToken: string): http.Server {
         return;
       }
 
+      if (req.method === "POST" && path === "/declaration") {
+        const body = await readBody(req);
+        await handlePostDeclaration(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/call-hierarchy") {
+        const body = await readBody(req);
+        await handlePostCallHierarchy(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/type-hierarchy") {
+        const body = await readBody(req);
+        await handlePostTypeHierarchy(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/workspace-symbols") {
+        const body = await readBody(req);
+        await handlePostWorkspaceSymbols(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/completion") {
+        const body = await readBody(req);
+        await handlePostCompletion(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/inlay-hints") {
+        const body = await readBody(req);
+        await handlePostInlayHints(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/folding-ranges") {
+        const body = await readBody(req);
+        await handlePostFoldingRanges(body, res);
+        return;
+      }
+
       // Health-check / discovery
       if (req.method === "GET" && path === "/") {
         sendJson(res, 200, {
           name: "vsc-agent-bridge",
-          version: "0.2.0",
+          version: "0.3.0",
           endpoints: [
             "GET  /diagnostics",
             "POST /definition",
+            "POST /declaration",
             "POST /hover",
             "GET  /active-file-content",
             "POST /references",
@@ -719,6 +1211,12 @@ export function createServer(authToken: string): http.Server {
             "POST /code-actions",
             "POST /signature-help",
             "POST /rename-preview",
+            "POST /call-hierarchy",
+            "POST /type-hierarchy",
+            "POST /workspace-symbols",
+            "POST /completion",
+            "POST /inlay-hints",
+            "POST /folding-ranges",
           ],
         });
         return;

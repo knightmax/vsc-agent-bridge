@@ -2,10 +2,14 @@ import { describe, it, expect } from "vitest";
 import {
   severityToString,
   symbolKindToString,
+  completionItemKindToString,
+  inlayHintKindToString,
+  foldingRangeKindToString,
   parsePositionParams,
   parseRangeParams,
   parseRenameParams,
   parseFileParams,
+  parseWorkspaceSymbolParams,
   sendJson,
   readBody,
 } from "../helpers";
@@ -385,5 +389,125 @@ describe("parseFileParams", () => {
   it("rejects invalid JSON", () => {
     const result = parseFileParams("not json");
     expect(result.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseWorkspaceSymbolParams
+// ---------------------------------------------------------------------------
+
+describe("parseWorkspaceSymbolParams", () => {
+  it("parses valid workspace symbol params", () => {
+    const result = parseWorkspaceSymbolParams(
+      JSON.stringify({ query: "MyClass" }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      params: { query: "MyClass" },
+    });
+  });
+
+  it("accepts empty query string", () => {
+    const result = parseWorkspaceSymbolParams(
+      JSON.stringify({ query: "" }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      params: { query: "" },
+    });
+  });
+
+  it("rejects missing query", () => {
+    const result = parseWorkspaceSymbolParams(JSON.stringify({}));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/query/);
+    }
+  });
+
+  it("rejects invalid JSON", () => {
+    const result = parseWorkspaceSymbolParams("not json");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/Invalid JSON/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// completionItemKindToString
+// ---------------------------------------------------------------------------
+
+describe("completionItemKindToString", () => {
+  it("returns 'Method' for kind 1", () => {
+    expect(completionItemKindToString(1)).toBe("Method");
+  });
+
+  it("returns 'Function' for kind 2", () => {
+    expect(completionItemKindToString(2)).toBe("Function");
+  });
+
+  it("returns 'Class' for kind 6", () => {
+    expect(completionItemKindToString(6)).toBe("Class");
+  });
+
+  it("returns 'Variable' for kind 5", () => {
+    expect(completionItemKindToString(5)).toBe("Variable");
+  });
+
+  it("returns 'Keyword' for kind 13", () => {
+    expect(completionItemKindToString(13)).toBe("Keyword");
+  });
+
+  it("returns 'Unknown' for unrecognized kind", () => {
+    expect(completionItemKindToString(999)).toBe("Unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// inlayHintKindToString
+// ---------------------------------------------------------------------------
+
+describe("inlayHintKindToString", () => {
+  it("returns 'Type' for kind 1", () => {
+    expect(inlayHintKindToString(1)).toBe("Type");
+  });
+
+  it("returns 'Parameter' for kind 2", () => {
+    expect(inlayHintKindToString(2)).toBe("Parameter");
+  });
+
+  it("returns undefined for undefined kind", () => {
+    expect(inlayHintKindToString(undefined)).toBeUndefined();
+  });
+
+  it("returns 'Unknown' for unrecognized kind", () => {
+    expect(inlayHintKindToString(99)).toBe("Unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// foldingRangeKindToString
+// ---------------------------------------------------------------------------
+
+describe("foldingRangeKindToString", () => {
+  it("returns 'Comment' for kind 1", () => {
+    expect(foldingRangeKindToString(1)).toBe("Comment");
+  });
+
+  it("returns 'Imports' for kind 2", () => {
+    expect(foldingRangeKindToString(2)).toBe("Imports");
+  });
+
+  it("returns 'Region' for kind 3", () => {
+    expect(foldingRangeKindToString(3)).toBe("Region");
+  });
+
+  it("returns undefined for undefined kind", () => {
+    expect(foldingRangeKindToString(undefined)).toBeUndefined();
+  });
+
+  it("returns 'Unknown' for unrecognized kind", () => {
+    expect(foldingRangeKindToString(99)).toBe("Unknown");
   });
 });

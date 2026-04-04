@@ -1,0 +1,894 @@
+openapi: 3.0.3
+info:
+  title: VS Code Agent Bridge
+  description: >
+    Local HTTP server exposing VS Code Language Server Protocol (LSP) features
+    as REST endpoints. Works with any programming language that has an LSP
+    extension installed in VS Code.
+  version: 0.3.0
+  license:
+    name: MIT
+
+servers:
+  - url: http://127.0.0.1:3003
+    description: Default local server
+
+security:
+  - authToken: []
+
+components:
+  securitySchemes:
+    authToken:
+      type: apiKey
+      in: header
+      name: x-auth-token
+      description: >
+        Authentication token. Copy it from VS Code via "Agent Bridge: Copy Auth
+        Token to Clipboard" in the Command Palette.
+
+  schemas:
+    # ── Shared primitives ──────────────────────────────────────────────
+    Position:
+      type: object
+      required: [line, character]
+      properties:
+        line:
+          type: integer
+          minimum: 0
+        character:
+          type: integer
+          minimum: 0
+
+    Range:
+      type: object
+      required: [start, end]
+      properties:
+        start:
+          $ref: "#/components/schemas/Position"
+        end:
+          $ref: "#/components/schemas/Position"
+
+    LocationWithUri:
+      type: object
+      required: [uri, range]
+      properties:
+        uri:
+          type: string
+        range:
+          $ref: "#/components/schemas/Range"
+
+    # ── Request bodies ─────────────────────────────────────────────────
+    PositionParams:
+      type: object
+      required: [file, line, character]
+      properties:
+        file:
+          type: string
+          description: Absolute path to the file.
+        line:
+          type: integer
+          minimum: 0
+        character:
+          type: integer
+          minimum: 0
+
+    RangeParams:
+      type: object
+      required: [file, startLine, startCharacter, endLine, endCharacter]
+      properties:
+        file:
+          type: string
+        startLine:
+          type: integer
+          minimum: 0
+        startCharacter:
+          type: integer
+          minimum: 0
+        endLine:
+          type: integer
+          minimum: 0
+        endCharacter:
+          type: integer
+          minimum: 0
+
+    FileParams:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          description: Absolute path to the file.
+
+    RenameParams:
+      type: object
+      required: [file, line, character, newName]
+      properties:
+        file:
+          type: string
+        line:
+          type: integer
+          minimum: 0
+        character:
+          type: integer
+          minimum: 0
+        newName:
+          type: string
+          minLength: 1
+
+    WorkspaceSymbolParams:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: Search string for symbol names.
+
+    # ── Response schemas ───────────────────────────────────────────────
+    DiagnosticItem:
+      type: object
+      properties:
+        range:
+          $ref: "#/components/schemas/Range"
+        message:
+          type: string
+        severity:
+          type: string
+          enum: [error, warning, information, hint]
+        source:
+          type: string
+        code:
+          oneOf:
+            - type: string
+            - type: integer
+
+    FileDiagnostics:
+      type: object
+      properties:
+        file:
+          type: string
+        diagnostics:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiagnosticItem"
+
+    DocumentSymbol:
+      type: object
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        range:
+          $ref: "#/components/schemas/Range"
+        selectionRange:
+          $ref: "#/components/schemas/Range"
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentSymbol"
+
+    CodeAction:
+      type: object
+      properties:
+        title:
+          type: string
+        kind:
+          type: string
+        isPreferred:
+          type: boolean
+
+    SignatureParameter:
+      type: object
+      properties:
+        label:
+          type: string
+        documentation:
+          type: string
+
+    Signature:
+      type: object
+      properties:
+        label:
+          type: string
+        documentation:
+          type: string
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/SignatureParameter"
+
+    RenameEdit:
+      type: object
+      properties:
+        range:
+          $ref: "#/components/schemas/Range"
+        newText:
+          type: string
+
+    RenameFileChange:
+      type: object
+      properties:
+        file:
+          type: string
+        edits:
+          type: array
+          items:
+            $ref: "#/components/schemas/RenameEdit"
+
+    HierarchyItem:
+      type: object
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        uri:
+          type: string
+        range:
+          $ref: "#/components/schemas/Range"
+        selectionRange:
+          $ref: "#/components/schemas/Range"
+
+    IncomingCall:
+      type: object
+      properties:
+        from:
+          $ref: "#/components/schemas/HierarchyItem"
+        fromRanges:
+          type: array
+          items:
+            $ref: "#/components/schemas/Range"
+
+    OutgoingCall:
+      type: object
+      properties:
+        to:
+          $ref: "#/components/schemas/HierarchyItem"
+        fromRanges:
+          type: array
+          items:
+            $ref: "#/components/schemas/Range"
+
+    WorkspaceSymbol:
+      type: object
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        containerName:
+          type: string
+        location:
+          $ref: "#/components/schemas/LocationWithUri"
+
+    CompletionItem:
+      type: object
+      properties:
+        label:
+          type: string
+        kind:
+          type: string
+        detail:
+          type: string
+        documentation:
+          type: string
+        sortText:
+          type: string
+        filterText:
+          type: string
+        insertText:
+          type: string
+
+    InlayHint:
+      type: object
+      properties:
+        position:
+          $ref: "#/components/schemas/Position"
+        label:
+          type: string
+        kind:
+          type: string
+          enum: [Type, Parameter]
+
+    FoldingRange:
+      type: object
+      properties:
+        startLine:
+          type: integer
+        endLine:
+          type: integer
+        kind:
+          type: string
+          enum: [Comment, Imports, Region]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid `x-auth-token` header.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadRequest:
+      description: Missing or invalid parameters.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+paths:
+  /:
+    get:
+      summary: Health check
+      description: Verify the bridge is running and list all available endpoints.
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Server information and endpoint list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  endpoints:
+                    type: array
+                    items:
+                      type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /diagnostics:
+    get:
+      summary: Get diagnostics (errors, warnings, hints)
+      description: >
+        Returns all compiler errors, warnings, and hints for the workspace.
+        Optionally filter to a single file with the `file` query parameter.
+      operationId: getDiagnostics
+      parameters:
+        - name: file
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Absolute path to filter diagnostics to a single file.
+      responses:
+        "200":
+          description: Diagnostics grouped by file.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FileDiagnostics"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /definition:
+    post:
+      summary: Go to definition
+      description: Find where a symbol is defined.
+      operationId: postDefinition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Definition locations.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  definitions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LocationWithUri"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /declaration:
+    post:
+      summary: Go to declaration
+      description: >
+        Find where a symbol is declared. Differs from definition in languages
+        like C/C++ where declaration and definition are separate.
+      operationId: postDeclaration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Declaration locations.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  declarations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LocationWithUri"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hover:
+    post:
+      summary: Hover — type and documentation
+      description: Get the type signature and documentation for a symbol.
+      operationId: postHover
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Hover contents.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contents:
+                    type: array
+                    items:
+                      type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /references:
+    post:
+      summary: Find all references
+      description: Find every location where a symbol is used across the project.
+      operationId: postReferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Reference locations.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  references:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LocationWithUri"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /type-definition:
+    post:
+      summary: Go to type definition
+      description: >
+        Jump to the type definition of a symbol (e.g., from a variable to its
+        class/interface).
+      operationId: postTypeDefinition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Type definition locations.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  definitions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LocationWithUri"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /implementation:
+    post:
+      summary: Go to implementation
+      description: >
+        Find concrete implementations of an interface, abstract method, or
+        protocol.
+      operationId: postImplementation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Implementation locations.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  implementations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LocationWithUri"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /document-symbols:
+    post:
+      summary: List symbols in a file
+      description: >
+        Get all classes, methods, functions, variables, and other symbols
+        defined in a file.
+      operationId: postDocumentSymbols
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileParams"
+      responses:
+        "200":
+          description: Hierarchical list of document symbols.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbols:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DocumentSymbol"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /code-actions:
+    post:
+      summary: Get code actions (quick fixes, refactorings)
+      description: >
+        Get available code actions for a specific range (e.g., quick fixes for
+        an error, extract method, organize imports).
+      operationId: postCodeActions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RangeParams"
+      responses:
+        "200":
+          description: Available code actions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  actions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CodeAction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /signature-help:
+    post:
+      summary: Function signature help
+      description: >
+        Get parameter hints and documentation for a function call at a given
+        position.
+      operationId: postSignatureHelp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Signature information.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signatures:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Signature"
+                  activeSignature:
+                    type: integer
+                  activeParameter:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /rename-preview:
+    post:
+      summary: Preview rename edits
+      description: >
+        Preview all the edits that would result from renaming a symbol, without
+        applying them.
+      operationId: postRenamePreview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameParams"
+      responses:
+        "200":
+          description: Rename edits grouped by file.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RenameFileChange"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /call-hierarchy:
+    post:
+      summary: Call hierarchy (incoming and outgoing calls)
+      description: >
+        Discover who calls a function (incoming) and what functions it calls
+        (outgoing). Essential for understanding code flow and impact analysis.
+      operationId: postCallHierarchy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Call hierarchy item with incoming and outgoing calls.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item:
+                    $ref: "#/components/schemas/HierarchyItem"
+                  incomingCalls:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IncomingCall"
+                  outgoingCalls:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OutgoingCall"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /type-hierarchy:
+    post:
+      summary: Type hierarchy (supertypes and subtypes)
+      description: >
+        Navigate the class/interface hierarchy — find parent types (supertypes)
+        and child types (subtypes).
+      operationId: postTypeHierarchy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Type hierarchy item with supertypes and subtypes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item:
+                    $ref: "#/components/schemas/HierarchyItem"
+                  supertypes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/HierarchyItem"
+                  subtypes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/HierarchyItem"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /workspace-symbols:
+    post:
+      summary: Search symbols across workspace
+      description: >
+        Search for classes, functions, variables, and other symbols across the
+        entire workspace. Unlike /document-symbols which is file-scoped, this
+        searches globally.
+      operationId: postWorkspaceSymbols
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspaceSymbolParams"
+      responses:
+        "200":
+          description: Matching workspace symbols.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbols:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkspaceSymbol"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /completion:
+    post:
+      summary: Code completion suggestions
+      description: >
+        Get code completion suggestions at a given position (autocomplete items
+        the language server would propose).
+      operationId: postCompletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionParams"
+      responses:
+        "200":
+          description: Completion items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CompletionItem"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /inlay-hints:
+    post:
+      summary: Inlay hints (type annotations, parameter names)
+      description: >
+        Get inlay hints for a range — inline annotations like type hints,
+        parameter names, and other decorations from the language server.
+      operationId: postInlayHints
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RangeParams"
+      responses:
+        "200":
+          description: Inlay hints for the range.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hints:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InlayHint"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /folding-ranges:
+    post:
+      summary: Folding ranges
+      description: >
+        Get the folding ranges of a file, showing logical code blocks
+        (functions, classes, imports, comments, regions).
+      operationId: postFoldingRanges
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileParams"
+      responses:
+        "200":
+          description: Folding ranges for the file.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ranges:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FoldingRange"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /active-file-content:
+    get:
+      summary: Read the currently open file
+      description: Get the full text and metadata of the file currently open in the editor.
+      operationId: getActiveFileContent
+      responses:
+        "200":
+          description: Active file content and metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file:
+                    type: string
+                  languageId:
+                    type: string
+                  lineCount:
+                    type: integer
+                  content:
+                    type: string
+        "404":
+          description: No file is currently open in the editor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"

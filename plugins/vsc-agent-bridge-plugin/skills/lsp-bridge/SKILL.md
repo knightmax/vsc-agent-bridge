@@ -1,7 +1,7 @@
 ---
 name: lsp-bridge
-description: "Query VS Code Language Server features through a local HTTP bridge. Use this skill whenever you need to investigate compilation errors, find references to a symbol, look up type information or documentation, navigate to definitions or implementations, list document symbols, get available code actions (quick fixes, refactorings), check function signatures, preview rename edits, or read the currently open file. Works with ANY programming language that has an LSP extension in VS Code — Java, Python, TypeScript, JavaScript, Go, Rust, C#, C++, Ruby, and more. Always use this skill when the user mentions compiler errors, diagnostics, code navigation, type checking, or symbol lookup in a VS Code workspace."
-argument-hint: "Describe what you need: e.g. 'check for compilation errors', 'find all references to UserService', 'get hover info at line 42', 'list all symbols in this file'."
+description: "Query VS Code Language Server features through a local HTTP bridge. Use this skill whenever you need to investigate compilation errors, find references to a symbol, look up type information or documentation, navigate to definitions, declarations, or implementations, list document or workspace symbols, get available code actions (quick fixes, refactorings), check function signatures, preview rename edits, explore call hierarchies, understand type hierarchies, get code completion suggestions, inspect inlay hints, get folding ranges, or read the currently open file. Works with ANY programming language that has an LSP extension in VS Code — Java, Python, TypeScript, JavaScript, Go, Rust, C#, C++, Ruby, and more. Always use this skill when the user mentions compiler errors, diagnostics, code navigation, type checking, symbol lookup, call graphs, or code structure analysis in a VS Code workspace."
+argument-hint: "Describe what you need: e.g. 'check for compilation errors', 'find all references to UserService', 'get hover info at line 42', 'list all symbols in this file', 'who calls this function', 'what are the subtypes of Animal'."
 compatibility: copilot
 user-invocable: true
 disable-model-invocation: false
@@ -9,7 +9,7 @@ disable-model-invocation: false
 
 # LSP Bridge — VS Code Agent Bridge Skill
 
-This skill lets you interact with the **VS Code Agent Bridge** extension, a local HTTP server that exposes Language Server Protocol (LSP) features as REST endpoints. It provides real-time compiler diagnostics, type information, code navigation, refactoring support, and more from the user's VS Code editor.
+This skill lets you interact with the **VS Code Agent Bridge** extension, a local HTTP server that exposes Language Server Protocol (LSP) features as REST endpoints. It provides real-time compiler diagnostics, type information, code navigation, call hierarchies, type hierarchies, code completion, refactoring support, and more from the user's VS Code editor.
 
 It works with **any programming language** that has a Language Server extension installed in VS Code (Java, Python, TypeScript, Go, Rust, C#, C++, etc.).
 
@@ -27,150 +27,68 @@ x-auth-token: <token>
 
 Ask the user for the token if you don't have it. They can copy it from VS Code via the command **"Agent Bridge: Copy Auth Token to Clipboard"** in the Command Palette.
 
-## Available Endpoints
+## API Reference
+
+The full API is described in the **OpenAPI 3.0 specification**:
+
+📄 **[references/openapi.yaml](references/openapi.yaml)**
 
 All POST endpoints expect a JSON body with `Content-Type: application/json`.
 
-### 1. GET /diagnostics — Errors and Warnings
+### Quick reference
 
-Retrieve all compiler errors, warnings, and hints for the workspace or a specific file. **Always start debugging here.**
+| Endpoint | Method | Description |
+|---|---|---|
+| `/diagnostics` | `GET` | Errors, warnings, hints. Filter with `?file=`. |
+| `/definition` | `POST` | Go to definition of a symbol. |
+| `/declaration` | `POST` | Go to declaration of a symbol. |
+| `/hover` | `POST` | Type signature and documentation. |
+| `/references` | `POST` | Find all references to a symbol. |
+| `/type-definition` | `POST` | Go to the type definition. |
+| `/implementation` | `POST` | Find implementations of an interface/abstract. |
+| `/document-symbols` | `POST` | List symbols in a file. |
+| `/code-actions` | `POST` | Quick fixes and refactorings for a range. |
+| `/signature-help` | `POST` | Parameter hints for a function call. |
+| `/rename-preview` | `POST` | Preview rename edits. |
+| `/call-hierarchy` | `POST` | Incoming and outgoing calls. |
+| `/type-hierarchy` | `POST` | Supertypes and subtypes. |
+| `/workspace-symbols` | `POST` | Search symbols across the workspace. |
+| `/completion` | `POST` | Code completion suggestions. |
+| `/inlay-hints` | `POST` | Type annotations and parameter name hints. |
+| `/folding-ranges` | `POST` | Folding ranges (code blocks). |
+| `/active-file-content` | `GET` | Full text of the open file. |
+| `/` | `GET` | Health-check / endpoint discovery. |
 
-```bash
-# All workspace diagnostics
-curl -s -H "x-auth-token: $TOKEN" http://127.0.0.1:3003/diagnostics
+### Common request bodies
 
-# Single file
-curl -s -H "x-auth-token: $TOKEN" "http://127.0.0.1:3003/diagnostics?file=/absolute/path/to/file.py"
+**Position-based endpoints** (definition, declaration, hover, references, type-definition, implementation, signature-help, call-hierarchy, type-hierarchy, completion):
+
+```json
+{ "file": "/absolute/path/to/file.ts", "line": 15, "character": 10 }
 ```
 
-**Response:** Array of `{ file, diagnostics: [{ range, message, severity, source, code }] }`
+**Range-based endpoints** (code-actions, inlay-hints):
 
-### 2. POST /definition — Go to Definition
-
-Find where a symbol is defined.
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts", "line": 15, "character": 10}' \
-  http://127.0.0.1:3003/definition
+```json
+{ "file": "/absolute/path/to/file.ts", "startLine": 10, "startCharacter": 0, "endLine": 10, "endCharacter": 30 }
 ```
 
-**Response:** `{ definitions: [{ uri, range }] }`
+**File-only endpoints** (document-symbols, folding-ranges):
 
-### 3. POST /hover — Type and Documentation
-
-Get the type signature and documentation for a symbol.
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts", "line": 15, "character": 10}' \
-  http://127.0.0.1:3003/hover
+```json
+{ "file": "/absolute/path/to/file.ts" }
 ```
 
-**Response:** `{ contents: ["type signature", "documentation text"] }`
+**Rename** (rename-preview):
 
-### 4. POST /references — Find All References
-
-Find every location where a symbol is used across the project.
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts", "line": 15, "character": 10}' \
-  http://127.0.0.1:3003/references
+```json
+{ "file": "/absolute/path/to/file.ts", "line": 5, "character": 10, "newName": "newVariableName" }
 ```
 
-**Response:** `{ references: [{ uri, range }] }`
+**Workspace search** (workspace-symbols):
 
-### 5. POST /type-definition — Go to Type Definition
-
-Jump to the type definition of a symbol (e.g., from a variable to its class/interface).
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts", "line": 15, "character": 10}' \
-  http://127.0.0.1:3003/type-definition
-```
-
-**Response:** `{ definitions: [{ uri, range }] }`
-
-### 6. POST /implementation — Go to Implementation
-
-Find concrete implementations of an interface, abstract method, or protocol.
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts", "line": 15, "character": 10}' \
-  http://127.0.0.1:3003/implementation
-```
-
-**Response:** `{ implementations: [{ uri, range }] }`
-
-### 7. POST /document-symbols — List Symbols in a File
-
-Get all classes, methods, functions, variables, and other symbols defined in a file.
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts"}' \
-  http://127.0.0.1:3003/document-symbols
-```
-
-**Response:** `{ symbols: [{ name, kind, range, selectionRange, children }] }`
-
-Kinds include: File, Module, Namespace, Package, Class, Method, Property, Field, Constructor, Enum, Interface, Function, Variable, Constant, String, Number, Boolean, Array, Object, Key, Null, EnumMember, Struct, Event, Operator, TypeParameter.
-
-### 8. POST /code-actions — Quick Fixes and Refactorings
-
-Get available code actions for a specific range (e.g., quick fixes for an error, extract method, organize imports).
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts", "startLine": 10, "startCharacter": 0, "endLine": 10, "endCharacter": 30}' \
-  http://127.0.0.1:3003/code-actions
-```
-
-**Response:** `{ actions: [{ title, kind, isPreferred }] }`
-
-### 9. POST /signature-help — Function Signatures
-
-Get parameter hints and documentation for a function call at a given position.
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts", "line": 15, "character": 20}' \
-  http://127.0.0.1:3003/signature-help
-```
-
-**Response:** `{ signatures: [{ label, documentation, parameters: [{ label, documentation }] }], activeSignature, activeParameter }`
-
-### 10. POST /rename-preview — Preview Rename Edits
-
-Preview all the edits that would result from renaming a symbol, without applying them.
-
-```bash
-curl -s -X POST -H "x-auth-token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"file": "/path/to/file.ts", "line": 5, "character": 10, "newName": "newVariableName"}' \
-  http://127.0.0.1:3003/rename-preview
-```
-
-**Response:** `{ changes: [{ file, edits: [{ range, newText }] }] }`
-
-### 11. GET /active-file-content — Read Open File
-
-Get the full text and metadata of the file currently open in the user's editor.
-
-```bash
-curl -s -H "x-auth-token: $TOKEN" http://127.0.0.1:3003/active-file-content
-```
-
-**Response:** `{ file, languageId, lineCount, content }`
-
-### 12. GET / — Health Check
-
-Verify the bridge is running and list all available endpoints.
-
-```bash
-curl -s -H "x-auth-token: $TOKEN" http://127.0.0.1:3003/
+```json
+{ "query": "UserService" }
 ```
 
 ## Workflow: Debugging Compilation Errors
@@ -181,16 +99,21 @@ curl -s -H "x-auth-token: $TOKEN" http://127.0.0.1:3003/
 4. **Navigate definitions** — use `POST /definition` to trace where symbols are defined.
 5. **Find references** — use `POST /references` to see where a symbol is used.
 6. **Check implementations** — use `POST /implementation` to find concrete implementations of interfaces.
-7. **Get code actions** — use `POST /code-actions` on the error range to see available quick fixes.
-8. **Read file content** — use `GET /active-file-content` for the full source.
-9. **Propose fixes** — suggest concrete code changes based on all the information gathered.
+7. **Explore call hierarchy** — use `POST /call-hierarchy` to understand who calls the problematic code and what it calls.
+8. **Get code actions** — use `POST /code-actions` on the error range to see available quick fixes.
+9. **Read file content** — use `GET /active-file-content` for the full source.
+10. **Propose fixes** — suggest concrete code changes based on all the information gathered.
 
 ## Workflow: Understanding Code Structure
 
 1. **List symbols** — `POST /document-symbols` to get an overview of classes, methods, and variables in a file.
-2. **Inspect types** — `POST /hover` on interesting symbols to see their types.
-3. **Trace definitions** — `POST /definition` and `POST /type-definition` to understand the type hierarchy.
-4. **Find usages** — `POST /references` to see how symbols are used across the project.
+2. **Search workspace** — `POST /workspace-symbols` to find symbols across the entire project by name.
+3. **Inspect types** — `POST /hover` on interesting symbols to see their types. Use `POST /inlay-hints` for a range overview of type annotations.
+4. **Trace definitions** — `POST /definition`, `POST /declaration`, and `POST /type-definition` to understand the type hierarchy.
+5. **Explore hierarchy** — `POST /type-hierarchy` to see supertypes and subtypes. `POST /call-hierarchy` to trace call graphs.
+6. **Find usages** — `POST /references` to see how symbols are used across the project.
+7. **View code blocks** — `POST /folding-ranges` to understand the logical structure of a file.
+8. **Get completions** — `POST /completion` to see what the language server suggests at a specific position.
 
 ## Error Handling
 
