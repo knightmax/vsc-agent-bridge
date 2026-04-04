@@ -6,11 +6,18 @@ import {
   type DiagnosticResponse,
   type DefinitionLocationResponse,
   type HoverContentResponse,
+  type ReferenceLocationResponse,
+  type DocumentSymbolResponse,
+  type CodeActionResponse,
   type SerializedDiagnostic,
   severityToString,
+  symbolKindToString,
   readBody,
   sendJson,
   parsePositionParams,
+  parseRangeParams,
+  parseRenameParams,
+  parseFileParams,
 } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -202,6 +209,415 @@ function handleGetActiveFileContent(res: http.ServerResponse): void {
   });
 }
 
+/**
+ * POST /references
+ *
+ * Body: { "file": "<absolute path>", "line": <number>, "character": <number> }
+ */
+async function handlePostReferences(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parsePositionParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  const locations = await vscode.commands.executeCommand<
+    vscode.Location[] | undefined
+  >("vscode.executeReferenceProvider", uri, position);
+
+  if (!locations || locations.length === 0) {
+    sendJson(res, 200, { references: [] });
+    return;
+  }
+
+  const references: ReferenceLocationResponse[] = locations.map((loc) => ({
+    uri: loc.uri.fsPath,
+    range: {
+      start: {
+        line: loc.range.start.line,
+        character: loc.range.start.character,
+      },
+      end: {
+        line: loc.range.end.line,
+        character: loc.range.end.character,
+      },
+    },
+  }));
+
+  sendJson(res, 200, { references });
+}
+
+/**
+ * POST /type-definition
+ *
+ * Body: { "file": "<absolute path>", "line": <number>, "character": <number> }
+ */
+async function handlePostTypeDefinition(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parsePositionParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  const locations = await vscode.commands.executeCommand<
+    vscode.Location[] | vscode.LocationLink[] | undefined
+  >("vscode.executeTypeDefinitionProvider", uri, position);
+
+  if (!locations || locations.length === 0) {
+    sendJson(res, 200, { definitions: [] });
+    return;
+  }
+
+  const definitions: DefinitionLocationResponse[] = locations.map((loc) => {
+    if ("targetUri" in loc) {
+      return {
+        uri: loc.targetUri.fsPath,
+        range: {
+          start: {
+            line: loc.targetRange.start.line,
+            character: loc.targetRange.start.character,
+          },
+          end: {
+            line: loc.targetRange.end.line,
+            character: loc.targetRange.end.character,
+          },
+        },
+      };
+    }
+    return {
+      uri: loc.uri.fsPath,
+      range: {
+        start: {
+          line: loc.range.start.line,
+          character: loc.range.start.character,
+        },
+        end: {
+          line: loc.range.end.line,
+          character: loc.range.end.character,
+        },
+      },
+    };
+  });
+
+  sendJson(res, 200, { definitions });
+}
+
+/**
+ * POST /implementation
+ *
+ * Body: { "file": "<absolute path>", "line": <number>, "character": <number> }
+ */
+async function handlePostImplementation(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parsePositionParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  const locations = await vscode.commands.executeCommand<
+    vscode.Location[] | vscode.LocationLink[] | undefined
+  >("vscode.executeImplementationProvider", uri, position);
+
+  if (!locations || locations.length === 0) {
+    sendJson(res, 200, { implementations: [] });
+    return;
+  }
+
+  const implementations: DefinitionLocationResponse[] = locations.map((loc) => {
+    if ("targetUri" in loc) {
+      return {
+        uri: loc.targetUri.fsPath,
+        range: {
+          start: {
+            line: loc.targetRange.start.line,
+            character: loc.targetRange.start.character,
+          },
+          end: {
+            line: loc.targetRange.end.line,
+            character: loc.targetRange.end.character,
+          },
+        },
+      };
+    }
+    return {
+      uri: loc.uri.fsPath,
+      range: {
+        start: {
+          line: loc.range.start.line,
+          character: loc.range.start.character,
+        },
+        end: {
+          line: loc.range.end.line,
+          character: loc.range.end.character,
+        },
+      },
+    };
+  });
+
+  sendJson(res, 200, { implementations });
+}
+
+/**
+ * POST /document-symbols
+ *
+ * Body: { "file": "<absolute path>" }
+ */
+async function handlePostDocumentSymbols(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parseFileParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const uri = vscode.Uri.file(parsed.params.file);
+
+  const symbols = await vscode.commands.executeCommand<
+    vscode.DocumentSymbol[] | vscode.SymbolInformation[] | undefined
+  >("vscode.executeDocumentSymbolProvider", uri);
+
+  if (!symbols || symbols.length === 0) {
+    sendJson(res, 200, { symbols: [] });
+    return;
+  }
+
+  function serializeDocumentSymbol(
+    sym: vscode.DocumentSymbol,
+  ): DocumentSymbolResponse {
+    return {
+      name: sym.name,
+      kind: symbolKindToString(sym.kind),
+      range: {
+        start: {
+          line: sym.range.start.line,
+          character: sym.range.start.character,
+        },
+        end: {
+          line: sym.range.end.line,
+          character: sym.range.end.character,
+        },
+      },
+      selectionRange: {
+        start: {
+          line: sym.selectionRange.start.line,
+          character: sym.selectionRange.start.character,
+        },
+        end: {
+          line: sym.selectionRange.end.line,
+          character: sym.selectionRange.end.character,
+        },
+      },
+      children: sym.children
+        ? sym.children.map(serializeDocumentSymbol)
+        : [],
+    };
+  }
+
+  // Handle both DocumentSymbol[] and SymbolInformation[]
+  const result: DocumentSymbolResponse[] = symbols.map((sym) => {
+    if ("children" in sym) {
+      return serializeDocumentSymbol(sym as vscode.DocumentSymbol);
+    }
+    // SymbolInformation (legacy)
+    const si = sym as vscode.SymbolInformation;
+    return {
+      name: si.name,
+      kind: symbolKindToString(si.kind),
+      range: {
+        start: {
+          line: si.location.range.start.line,
+          character: si.location.range.start.character,
+        },
+        end: {
+          line: si.location.range.end.line,
+          character: si.location.range.end.character,
+        },
+      },
+      selectionRange: {
+        start: {
+          line: si.location.range.start.line,
+          character: si.location.range.start.character,
+        },
+        end: {
+          line: si.location.range.end.line,
+          character: si.location.range.end.character,
+        },
+      },
+      children: [],
+    };
+  });
+
+  sendJson(res, 200, { symbols: result });
+}
+
+/**
+ * POST /code-actions
+ *
+ * Body: { "file": "<path>", "startLine": N, "startCharacter": N, "endLine": N, "endCharacter": N }
+ */
+async function handlePostCodeActions(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parseRangeParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, startLine, startCharacter, endLine, endCharacter } =
+    parsed.params;
+  const uri = vscode.Uri.file(file);
+  const range = new vscode.Range(
+    new vscode.Position(startLine, startCharacter),
+    new vscode.Position(endLine, endCharacter),
+  );
+
+  const actions = await vscode.commands.executeCommand<
+    vscode.CodeAction[] | undefined
+  >("vscode.executeCodeActionProvider", uri, range);
+
+  if (!actions || actions.length === 0) {
+    sendJson(res, 200, { actions: [] });
+    return;
+  }
+
+  const result: CodeActionResponse[] = actions.map((a) => ({
+    title: a.title,
+    kind: a.kind?.value,
+    isPreferred: a.isPreferred,
+  }));
+
+  sendJson(res, 200, { actions: result });
+}
+
+/**
+ * POST /signature-help
+ *
+ * Body: { "file": "<absolute path>", "line": <number>, "character": <number> }
+ */
+async function handlePostSignatureHelp(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parsePositionParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  const help = await vscode.commands.executeCommand<
+    vscode.SignatureHelp | undefined
+  >("vscode.executeSignatureHelpProvider", uri, position);
+
+  if (!help || !("signatures" in help) || help.signatures.length === 0) {
+    sendJson(res, 200, { signatures: [], activeSignature: 0, activeParameter: 0 });
+    return;
+  }
+
+  const signatures = help.signatures.map((sig) => ({
+    label: sig.label,
+    documentation:
+      typeof sig.documentation === "string"
+        ? sig.documentation
+        : sig.documentation?.value ?? "",
+    parameters: sig.parameters.map((p) => ({
+      label: p.label,
+      documentation:
+        typeof p.documentation === "string"
+          ? p.documentation
+          : p.documentation?.value ?? "",
+    })),
+  }));
+
+  sendJson(res, 200, {
+    signatures,
+    activeSignature: help.activeSignature,
+    activeParameter: help.activeParameter,
+  });
+}
+
+/**
+ * POST /rename-preview
+ *
+ * Body: { "file": "<path>", "line": N, "character": N, "newName": "<string>" }
+ * Returns the set of edits that would be applied by a rename, without actually
+ * applying them.
+ */
+async function handlePostRenamePreview(
+  body: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const parsed = parseRenameParams(body);
+  if (!parsed.ok) {
+    sendJson(res, 400, { error: parsed.error });
+    return;
+  }
+
+  const { file, line, character, newName } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  const position = new vscode.Position(line, character);
+
+  const edit = await vscode.commands.executeCommand<
+    vscode.WorkspaceEdit | undefined
+  >("vscode.executeDocumentRenameProvider", uri, position, newName);
+
+  if (!edit) {
+    sendJson(res, 200, { changes: [] });
+    return;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const changes: any[] = [];
+  for (const [changeUri, textEdits] of edit.entries()) {
+    changes.push({
+      file: changeUri.fsPath,
+      edits: textEdits.map((te) => ({
+        range: {
+          start: {
+            line: te.range.start.line,
+            character: te.range.start.character,
+          },
+          end: {
+            line: te.range.end.line,
+            character: te.range.end.character,
+          },
+        },
+        newText: te.newText,
+      })),
+    });
+  }
+
+  sendJson(res, 200, { changes });
+}
+
 // ---------------------------------------------------------------------------
 // Server factory
 // ---------------------------------------------------------------------------
@@ -244,16 +660,65 @@ export function createServer(authToken: string): http.Server {
         return;
       }
 
+      if (req.method === "POST" && path === "/references") {
+        const body = await readBody(req);
+        await handlePostReferences(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/type-definition") {
+        const body = await readBody(req);
+        await handlePostTypeDefinition(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/implementation") {
+        const body = await readBody(req);
+        await handlePostImplementation(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/document-symbols") {
+        const body = await readBody(req);
+        await handlePostDocumentSymbols(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/code-actions") {
+        const body = await readBody(req);
+        await handlePostCodeActions(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/signature-help") {
+        const body = await readBody(req);
+        await handlePostSignatureHelp(body, res);
+        return;
+      }
+
+      if (req.method === "POST" && path === "/rename-preview") {
+        const body = await readBody(req);
+        await handlePostRenamePreview(body, res);
+        return;
+      }
+
       // Health-check / discovery
       if (req.method === "GET" && path === "/") {
         sendJson(res, 200, {
           name: "vsc-agent-bridge",
-          version: "0.1.0",
+          version: "0.2.0",
           endpoints: [
             "GET  /diagnostics",
             "POST /definition",
             "POST /hover",
             "GET  /active-file-content",
+            "POST /references",
+            "POST /type-definition",
+            "POST /implementation",
+            "POST /document-symbols",
+            "POST /code-actions",
+            "POST /signature-help",
+            "POST /rename-preview",
           ],
         });
         return;

@@ -38,6 +38,12 @@ vi.mock("vscode", () => ({
       public character: number,
     ) {}
   },
+  Range: class {
+    constructor(
+      public start: { line: number; character: number },
+      public end: { line: number; character: number },
+    ) {}
+  },
   DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
 }));
 
@@ -185,8 +191,16 @@ describe("HTTP server", () => {
     expect(status).toBe(200);
     const obj = body as Record<string, unknown>;
     expect(obj.name).toBe("vsc-agent-bridge");
-    expect(obj.version).toBe("0.1.0");
+    expect(obj.version).toBe("0.2.0");
     expect(Array.isArray(obj.endpoints)).toBe(true);
+    const endpoints = obj.endpoints as string[];
+    expect(endpoints).toContain("POST /references");
+    expect(endpoints).toContain("POST /type-definition");
+    expect(endpoints).toContain("POST /implementation");
+    expect(endpoints).toContain("POST /document-symbols");
+    expect(endpoints).toContain("POST /code-actions");
+    expect(endpoints).toContain("POST /signature-help");
+    expect(endpoints).toContain("POST /rename-preview");
   });
 
   // -- 404 -----------------------------------------------------------------
@@ -283,5 +297,171 @@ describe("HTTP server", () => {
     expect(status).toBe(400);
     const obj = body as Record<string, unknown>;
     expect(obj.error).toMatch(/line/);
+  });
+
+  // -- POST /references (mocked empty) ------------------------------------
+
+  it("POST /references returns empty references for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/references",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.references).toEqual([]);
+  });
+
+  it("POST /references returns 400 for invalid body", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/references",
+      body: "not json",
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/Invalid JSON/);
+  });
+
+  // -- POST /type-definition (mocked empty) --------------------------------
+
+  it("POST /type-definition returns empty definitions for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/type-definition",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.definitions).toEqual([]);
+  });
+
+  // -- POST /implementation (mocked empty) ---------------------------------
+
+  it("POST /implementation returns empty implementations for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/implementation",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.implementations).toEqual([]);
+  });
+
+  // -- POST /document-symbols (mocked empty) -------------------------------
+
+  it("POST /document-symbols returns empty symbols for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/document-symbols",
+      body: JSON.stringify({ file: "/path/to/File.java" }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.symbols).toEqual([]);
+  });
+
+  it("POST /document-symbols returns 400 for missing file", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/document-symbols",
+      body: JSON.stringify({}),
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/file/);
+  });
+
+  // -- POST /code-actions (mocked empty) -----------------------------------
+
+  it("POST /code-actions returns empty actions for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/code-actions",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        startLine: 0,
+        startCharacter: 0,
+        endLine: 10,
+        endCharacter: 0,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.actions).toEqual([]);
+  });
+
+  it("POST /code-actions returns 400 for missing range fields", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/code-actions",
+      body: JSON.stringify({ file: "/a.java", startLine: 0 }),
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/startCharacter/);
+  });
+
+  // -- POST /signature-help (mocked empty) ---------------------------------
+
+  it("POST /signature-help returns empty signatures for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/signature-help",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.signatures).toEqual([]);
+  });
+
+  // -- POST /rename-preview (mocked empty) ---------------------------------
+
+  it("POST /rename-preview returns empty changes for mocked provider", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/rename-preview",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+        newName: "newVariable",
+      }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.changes).toEqual([]);
+  });
+
+  it("POST /rename-preview returns 400 for missing newName", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/rename-preview",
+      body: JSON.stringify({
+        file: "/path/to/File.java",
+        line: 10,
+        character: 5,
+      }),
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/newName/);
   });
 });

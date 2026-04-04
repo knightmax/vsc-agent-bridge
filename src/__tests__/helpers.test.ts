@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   severityToString,
+  symbolKindToString,
   parsePositionParams,
+  parseRangeParams,
+  parseRenameParams,
+  parseFileParams,
   sendJson,
   readBody,
 } from "../helpers";
@@ -209,5 +213,177 @@ describe("sendJson", () => {
 
     expect(writtenStatus).toBe(400);
     expect(JSON.parse(writtenBody)).toEqual({ error: "bad request" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// symbolKindToString
+// ---------------------------------------------------------------------------
+
+describe("symbolKindToString", () => {
+  it("returns 'Class' for kind 4", () => {
+    expect(symbolKindToString(4)).toBe("Class");
+  });
+
+  it("returns 'Method' for kind 5", () => {
+    expect(symbolKindToString(5)).toBe("Method");
+  });
+
+  it("returns 'Function' for kind 11", () => {
+    expect(symbolKindToString(11)).toBe("Function");
+  });
+
+  it("returns 'Variable' for kind 12", () => {
+    expect(symbolKindToString(12)).toBe("Variable");
+  });
+
+  it("returns 'Interface' for kind 10", () => {
+    expect(symbolKindToString(10)).toBe("Interface");
+  });
+
+  it("returns 'Unknown' for unrecognized kind", () => {
+    expect(symbolKindToString(999)).toBe("Unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseRangeParams
+// ---------------------------------------------------------------------------
+
+describe("parseRangeParams", () => {
+  it("parses valid range params", () => {
+    const result = parseRangeParams(
+      JSON.stringify({
+        file: "/path/to/file.ts",
+        startLine: 0,
+        startCharacter: 0,
+        endLine: 10,
+        endCharacter: 5,
+      }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      params: {
+        file: "/path/to/file.ts",
+        startLine: 0,
+        startCharacter: 0,
+        endLine: 10,
+        endCharacter: 5,
+      },
+    });
+  });
+
+  it("rejects invalid JSON", () => {
+    const result = parseRangeParams("not json");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/Invalid JSON/);
+    }
+  });
+
+  it("rejects missing file", () => {
+    const result = parseRangeParams(
+      JSON.stringify({ startLine: 0, startCharacter: 0, endLine: 10, endCharacter: 0 }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/file/);
+    }
+  });
+
+  it("rejects missing startLine", () => {
+    const result = parseRangeParams(
+      JSON.stringify({ file: "/a.ts", startCharacter: 0, endLine: 10, endCharacter: 0 }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/startLine/);
+    }
+  });
+
+  it("rejects negative endLine", () => {
+    const result = parseRangeParams(
+      JSON.stringify({ file: "/a.ts", startLine: 0, startCharacter: 0, endLine: -1, endCharacter: 0 }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/endLine/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseRenameParams
+// ---------------------------------------------------------------------------
+
+describe("parseRenameParams", () => {
+  it("parses valid rename params", () => {
+    const result = parseRenameParams(
+      JSON.stringify({ file: "/a.ts", line: 5, character: 10, newName: "newVar" }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      params: { file: "/a.ts", line: 5, character: 10, newName: "newVar" },
+    });
+  });
+
+  it("rejects missing newName", () => {
+    const result = parseRenameParams(
+      JSON.stringify({ file: "/a.ts", line: 5, character: 10 }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/newName/);
+    }
+  });
+
+  it("rejects empty newName", () => {
+    const result = parseRenameParams(
+      JSON.stringify({ file: "/a.ts", line: 5, character: 10, newName: "" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/newName/);
+    }
+  });
+
+  it("rejects invalid JSON", () => {
+    const result = parseRenameParams("bad");
+    expect(result.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseFileParams
+// ---------------------------------------------------------------------------
+
+describe("parseFileParams", () => {
+  it("parses valid file params", () => {
+    const result = parseFileParams(JSON.stringify({ file: "/path/to/file.ts" }));
+    expect(result).toEqual({
+      ok: true,
+      params: { file: "/path/to/file.ts" },
+    });
+  });
+
+  it("rejects missing file", () => {
+    const result = parseFileParams(JSON.stringify({}));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/file/);
+    }
+  });
+
+  it("rejects empty file string", () => {
+    const result = parseFileParams(JSON.stringify({ file: "" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/file/);
+    }
+  });
+
+  it("rejects invalid JSON", () => {
+    const result = parseFileParams("not json");
+    expect(result.ok).toBe(false);
   });
 });
