@@ -2,7 +2,7 @@
   "name": "vsc-agent-bridge",
   "displayName": "VS Code Agent Bridge",
   "description": "A local HTTP server extension that exposes VS Code Language Server features (diagnostics, hover, definitions, declarations, references, symbols, code actions, call hierarchy, type hierarchy, workspace symbols, completion, inlay hints, folding ranges, and more) as REST endpoints for AI assistants. Works with any language that has an LSP extension installed.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "knightmax",
   "license": "MIT",
   "repository": {
@@ -24,6 +24,10 @@
       {
         "command": "vscAgentBridge.showAuthToken",
         "title": "Agent Bridge: Copy Auth Token to Clipboard"
+      },
+      {
+        "command": "vscAgentBridge.copyConnectionInfo",
+        "title": "Agent Bridge: Copy Connection Info to Clipboard"
       }
     ],
     "configuration": {
@@ -31,8 +35,8 @@
       "properties": {
         "vscAgentBridge.port": {
           "type": "number",
-          "default": 3003,
-          "description": "Port number for the local HTTP server."
+          "default": 0,
+          "description": "Port number for the local HTTP server. Use 0 (default) for automatic port assignment, which allows multiple VS Code instances to run simultaneously."
         },
         "vscAgentBridge.authToken": {
           "type": "string",
@@ -57,6 +61,6 @@
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.56.0",
     "typescript": "^5.3.0",
-    "vitest": "^4.1.2"
+    "vitest": "^3.2.4"
   }
 }

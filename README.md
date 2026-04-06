@@ -4,10 +4,45 @@ A VS Code extension that starts a **local HTTP server** exposing Language Server
 
 Works with **any programming language** that has a Language Server extension installed in VS Code.
 
+## How it works
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         VS Code                                  │
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────────┐    ┌────────────────┐  │
+│  │  Language    │◄──►│  VS Code Agent   │◄──►│  Discovery     │  │
+│  │  Server      │    │  Bridge (ext)    │    │  File          │  │
+│  │  (LSP)       │    │                  │    │  ~/.vsc-agent- │  │
+│  │              │    │  HTTP server on  │    │  bridge/*.json │  │
+│  │  Java/TS/    │    │  localhost:PORT  │    └────────────────┘  │
+│  │  Python/...  │    └────────┬─────────┘                        │
+│  └──────────────┘             │                                  │
+└───────────────────────────────┼──────────────────────────────────┘
+                                │  REST API (JSON)
+                                │  x-auth-token header
+                                │
+          ┌─────────────────────┼─────────────────────┐
+          │                     │                     │
+          ▼                     ▼                     ▼
+  ┌───────────────┐   ┌───────────────┐   ┌───────────────────┐
+  │  AI Agent     │   │  CLI Script   │   │  Another Tool     │
+  │  (Copilot,    │   │  (curl, etc.) │   │  (IDE plugin,     │
+  │   Claude...)  │   │               │   │   custom client)  │
+  └───────────────┘   └───────────────┘   └───────────────────┘
+```
+
+1. **VS Code** loads the extension on startup
+2. The extension starts an **HTTP server** on a random port (or configured port)
+3. It writes a **discovery file** (`~/.vsc-agent-bridge/<hash>.json`) with port, token, and workspace info
+4. **External clients** read the discovery file to find the port and auth token
+5. Clients send HTTP requests → the bridge delegates to the **Language Server** via VS Code API → returns JSON
+
 ## Features
 
 | Endpoint | Method | Description |
 |---|---|---|
+| `/info` | `GET` | Instance info (no auth required): port, PID, workspace folders. |
 | `/diagnostics` | `GET` | Errors, warnings, hints from the language server. |
 | `/definition` | `POST` | Go to definition of a symbol. |
 | `/declaration` | `POST` | Go to declaration of a symbol. |
@@ -21,7 +56,7 @@ Works with **any programming language** that has a Language Server extension ins
 | `/rename-preview` | `POST` | Preview edits from renaming a symbol. |
 | `/call-hierarchy` | `POST` | Incoming and outgoing calls for a symbol. |
 | `/type-hierarchy` | `POST` | Supertypes and subtypes for a class or interface. |
-| `/workspace-symbols` | `POST` | Search symbols across the entire workspace. |
+| `/workspace-symbols` | `POST` | Search symbols across the entire workspace. Supports optional `folder` filter. |
 | `/completion` | `POST` | Code completion suggestions at a position. |
 | `/inlay-hints` | `POST` | Inlay hints (type annotations, parameter names) for a range. |
 | `/folding-ranges` | `POST` | Folding ranges for a file. |
@@ -47,7 +82,7 @@ Open VS Code settings and search for `vscAgentBridge`:
 
 | Setting | Default | Description |
 |---|---|---|
-| `vscAgentBridge.port` | `3003` | Port for the local HTTP server. |
+| `vscAgentBridge.port` | `0` (auto) | Port for the local HTTP server. Use `0` for automatic assignment (allows multiple VS Code instances). |
 | `vscAgentBridge.authToken` | *(empty - auto-generated)* | Static auth token. If left empty, a random token is generated each time the extension activates. |
 
 ### Activation
@@ -56,13 +91,32 @@ The extension activates automatically when VS Code starts (`onStartupFinished`).
 
 ## Authentication
 
-Every request must include the header:
+Every request (except `GET /info`) must include the header:
 
 ```
 x-auth-token: <your-token>
 ```
 
-Copy the auto-generated token via the command **"Agent Bridge: Copy Auth Token to Clipboard"** (Command Palette).
+### Automatic Discovery (recommended)
+
+The extension writes a JSON discovery file to `~/.vsc-agent-bridge/` on startup. Each VS Code instance gets its own file containing:
+
+```json
+{
+  "port": 54321,
+  "token": "abc123...",
+  "pid": 12345,
+  "version": "0.4.0",
+  "workspaceFolders": ["/home/user/project"],
+  "startedAt": "2026-04-06T10:30:00Z"
+}
+```
+
+Agents should read these files to automatically find the port and token for the target workspace.
+
+### Manual Copy
+
+Copy the auto-generated token via **"Agent Bridge: Copy Auth Token to Clipboard"** or the full connection info via **"Agent Bridge: Copy Connection Info to Clipboard"** (Command Palette).
 
 ## API Reference
 
@@ -98,9 +152,11 @@ Returns all diagnostics (errors, warnings, hints, info) for the workspace.
 
 ### `POST /definition`
 
+> **Note:** Cross-file resolution depends on the Language Server and project configuration. JavaScript/CommonJS projects require a `jsconfig.json`. When no config is found, the response includes a `_warning` field.
+
 **Body:** `{ "file": "<path>", "line": <n>, "character": <n> }`
 
-**Response:** `{ "definitions": [{ "uri": "<path>", "range": { "start": {...}, "end": {...} } }] }`
+**Response:** `{ "definitions": [{ "uri": "<path>", "range": { "start": {...}, "end": {...} } }], "_warning": "No jsconfig.json..." }`
 
 ### `POST /hover`
 
@@ -194,9 +250,9 @@ Returns the type hierarchy item at the given position along with its supertypes 
 
 ### `POST /workspace-symbols`
 
-Search for symbols across the entire workspace by name.
+Search for symbols across the entire workspace by name. Use the optional `folder` parameter to scope results to a specific project folder.
 
-**Body:** `{ "query": "MyClass" }`
+**Body:** `{ "query": "MyClass" }` or `{ "query": "MyClass", "folder": "/path/to/project" }`
 
 **Response:** `{ "symbols": [{ "name": "MyClass", "kind": "Class", "containerName": "src/models", "location": { "uri": "<path>", "range": {...} } }] }`
 
@@ -216,6 +272,8 @@ Returns inlay hints (type annotations, parameter names) for the given range.
 
 **Response:** `{ "hints": [{ "position": { "line": 5, "character": 10 }, "label": ": string", "kind": "Type" }] }`
 
+> **Note:** When the Language Server does not provide a `kind`, the bridge applies a heuristic: labels ending with `:` → `Parameter`, labels starting with `:` → `Type`. The field may still be absent if the heuristic cannot determine the kind.
+
 ### `POST /folding-ranges`
 
 Returns folding ranges for a file, showing logical code blocks.
@@ -223,6 +281,8 @@ Returns folding ranges for a file, showing logical code blocks.
 **Body:** `{ "file": "<path>" }`
 
 **Response:** `{ "ranges": [{ "startLine": 10, "endLine": 25, "kind": "Region" }] }`
+
+> **Note:** `kind` may be absent for code blocks. Only import blocks typically have `kind: "Imports"`.
 
 ### `GET /active-file-content`
 
@@ -232,13 +292,56 @@ Returns folding ranges for a file, showing logical code blocks.
 
 This repository includes a Copilot plugin that teaches AI assistants how to use the bridge. See `plugins/vsc-agent-bridge-plugin/` for the plugin structure and `SKILL.md` for the skill definition.
 
+## Installation from source
+
+### Prerequisites
+
+- Node.js + npm
+- VS Code (version ≥ the one specified in `package.json` under `engines.vscode`)
+- The `code` CLI in your PATH (Command Palette → **"Shell Command: Install 'code' command in PATH"**)
+
+### 1. Install & compile
+
+```bash
+npm install
+npm run compile
+```
+
+### 2. Package the .vsix
+
+Use `vsce` via npx (no global install needed):
+
+```bash
+npx @vscode/vsce@latest package
+```
+
+This produces a file like `vsc-agent-bridge-X.X.X.vsix`.
+
+### 3. Install in VS Code
+
+```bash
+code --install-extension vsc-agent-bridge-X.X.X.vsix
+```
+
+Or open VS Code → Extensions view → `···` menu → **"Install from VSIX…"**.
+
+### 4. Verify
+
+```bash
+code --list-extensions | grep knightmax
+```
+
+Or search for **"VS Code Agent Bridge"** in the Extensions view.
+
+> **Tip:** For development, press **F5** to launch the Extension Development Host — no packaging needed.
+
 ## Development
 
 ```bash
 npm install       # Install dependencies
 npm run compile   # Build
 npm run lint      # Lint
-npm test          # Run tests (93 tests)
+npm test          # Run tests
 npm run watch     # Watch mode
 ```
 

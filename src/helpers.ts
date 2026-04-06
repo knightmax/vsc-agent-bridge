@@ -87,6 +87,7 @@ export interface FileParams {
 
 export interface WorkspaceSymbolParams {
   query: string;
+  folder?: string;
 }
 
 export interface WorkspaceSymbolResponse {
@@ -412,9 +413,16 @@ export function parseWorkspaceSymbolParams(
     return { ok: false, error: "'query' (string) is required." };
   }
 
+  if (obj.folder !== undefined && typeof obj.folder !== "string") {
+    return { ok: false, error: "'folder' must be a string if provided." };
+  }
+
   return {
     ok: true,
-    params: { query: obj.query as string },
+    params: {
+      query: obj.query as string,
+      ...(typeof obj.folder === "string" ? { folder: obj.folder } : {}),
+    },
   };
 }
 

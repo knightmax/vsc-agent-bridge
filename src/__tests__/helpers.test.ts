@@ -417,6 +417,36 @@ describe("parseWorkspaceSymbolParams", () => {
     });
   });
 
+  it("parses valid workspace symbol params with folder", () => {
+    const result = parseWorkspaceSymbolParams(
+      JSON.stringify({ query: "MyClass", folder: "/path/to/project" }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      params: { query: "MyClass", folder: "/path/to/project" },
+    });
+  });
+
+  it("ignores absent folder", () => {
+    const result = parseWorkspaceSymbolParams(
+      JSON.stringify({ query: "MyClass" }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.params.folder).toBeUndefined();
+    }
+  });
+
+  it("rejects non-string folder", () => {
+    const result = parseWorkspaceSymbolParams(
+      JSON.stringify({ query: "MyClass", folder: 42 }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/folder/);
+    }
+  });
+
   it("rejects missing query", () => {
     const result = parseWorkspaceSymbolParams(JSON.stringify({}));
     expect(result.ok).toBe(false);

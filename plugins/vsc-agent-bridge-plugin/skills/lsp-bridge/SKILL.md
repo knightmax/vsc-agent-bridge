@@ -15,17 +15,74 @@ It works with **any programming language** that has a Language Server extension 
 
 ## Prerequisites
 
-The **VS Code Agent Bridge** extension must be installed and running. It activates automatically when VS Code starts. The server runs on `http://127.0.0.1:3003` by default.
+The **VS Code Agent Bridge** extension must be installed and running. It activates automatically when VS Code starts.
+
+### Instance Discovery (recommended)
+
+The extension writes a JSON discovery file to `~/.vsc-agent-bridge/` when it starts. Each VS Code instance writes its own file containing the port, auth token, and workspace folders.
+
+**To find the right instance automatically:**
+
+1. List files in `~/.vsc-agent-bridge/*.json`
+2. Read each file to find the one whose `workspaceFolders` contains your project path
+3. Use the `port` and `token` from that file
+
+Example discovery file:
+
+```json
+{
+  "port": 54321,
+  "token": "abc123...",
+  "pid": 12345,
+  "version": "0.4.0",
+  "workspaceFolders": ["/Users/dev/projects/my-app"],
+  "startedAt": "2026-04-06T10:30:00Z"
+}
+```
+
+You can also call `GET /info` (no auth required) on any port to verify which VS Code instance is running there.
 
 ### Authentication
 
-Every request **must** include the header:
+Every request (except `GET /info`) **must** include the header:
 
 ```
 x-auth-token: <token>
 ```
 
-Ask the user for the token if you don't have it. They can copy it from VS Code via the command **"Agent Bridge: Copy Auth Token to Clipboard"** in the Command Palette.
+The token is available from the discovery file (`~/.vsc-agent-bridge/*.json`). If discovery files are not available, ask the user to copy it from VS Code via the command **"Agent Bridge: Copy Connection Info to Clipboard"** in the Command Palette.
+
+### Language-specific prerequisites
+
+#### JavaScript / CommonJS
+
+For cross-file navigation (`/definition`, `/references`, `/implementation`, `/rename-preview`) to work correctly, a `jsconfig.json` must exist at the project root:
+
+```json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "src/*": ["src/*"] }
+  },
+  "include": ["src/**/*"]
+}
+```
+
+Without this file, tsserver limits resolution to the current file only. The following endpoints degrade:
+- `/definition` — resolves to the local `require(...)` line instead of the source file
+- `/references` — only finds references within the same file
+- `/implementation` — only finds implementations within the same file
+- `/rename-preview` — only renames within the same file (**dangerous**: partial rename can break the project)
+- `/call-hierarchy` — `incomingCalls` always empty
+- `/inlay-hints` — empty unless `javascript.inlayHints.*` settings are enabled in VS Code
+
+#### TypeScript
+
+Works out of the box when `tsconfig.json` is present.
+
+#### Java
+
+No additional configuration required. JDT.LS resolves cross-module.
 
 ## API Reference
 
@@ -39,6 +96,7 @@ All POST endpoints expect a JSON body with `Content-Type: application/json`.
 
 | Endpoint | Method | Description |
 |---|---|---|
+| `/info` | `GET` | Instance info (no auth). Port, PID, workspace folders. |
 | `/diagnostics` | `GET` | Errors, warnings, hints. Filter with `?file=`. |
 | `/definition` | `POST` | Go to definition of a symbol. |
 | `/declaration` | `POST` | Go to declaration of a symbol. |
@@ -91,6 +149,12 @@ All POST endpoints expect a JSON body with `Content-Type: application/json`.
 { "query": "UserService" }
 ```
 
+Use the optional `folder` parameter to scope results to a specific project and exclude symbols from other projects, dependencies, or Markdown files:
+
+```json
+{ "query": "UserService", "folder": "/absolute/path/to/project" }
+```
+
 ## Workflow: Debugging Compilation Errors
 
 1. **Get the auth token** — ask the user if you don't have it.
@@ -117,12 +181,39 @@ All POST endpoints expect a JSON body with `Content-Type: application/json`.
 
 ## Error Handling
 
-- **401 Unauthorized**: The `x-auth-token` header is missing or incorrect. Ask the user for the correct token.
+- **401 Unauthorized**: The `x-auth-token` header is missing or incorrect. Read the token from the discovery file or ask the user.
 - **400 Bad Request**: Missing or invalid parameters in the request body. Check the required fields.
-- **404 Not Found (on /active-file-content)**: No file is currently open in the editor.
-- **Empty results**: If endpoints return empty arrays, the Language Server may still be loading, or the position/file may be incorrect.
+- **404 Not Found**: The file path does not exist, or (on `/active-file-content`) no file is currently open.
+- **Empty results**: If endpoints return empty arrays, the Language Server may still be loading, the position/file may be incorrect, or the Language Server does not support the feature for this language.
 - **Connection refused**: The extension is not running. Ask the user to ensure VS Code Agent Bridge is installed and active.
+
+> **Note:** The `/diagnostics` endpoint returns a **root-level JSON array** `[...]`, not wrapped in an object, unlike other endpoints.
+
+## Language Server Limitations
+
+The quality and completeness of results depends on the Language Server behind each language. Known limitations:
+
+### Java (JDT.LS / Red Hat Java)
+- **`/declaration`**: Always returns empty. Java does not distinguish declaration from definition. Use `/definition` instead.
+- **`/type-hierarchy`**: May return `item: null` for many positions. The cursor must be precisely on the type name in its declaration. Consider `/implementation` as an alternative.
+- **`/inlay-hints`**: The `kind` field is not provided by JDT.LS. The bridge applies a heuristic: labels ending with `:` → `Parameter`, labels starting with `:` → `Type`. Some hints may still have no `kind`.
+- **`/folding-ranges`**: Only import blocks have `kind: "Imports"`. Other code blocks have no `kind` value.
+- **`/hover`**: Contents may include VS Code internal `command:` links (automatically stripped by the bridge).
+
+### JavaScript / CommonJS (tsserver)
+- **`/declaration`**: Always returns empty (same as Java).
+- **`/type-definition`**: Always empty for pure JavaScript without JSDoc `@type` annotations.
+- **`/type-hierarchy`**: Returns `item: null` systematically.
+- **`/document-symbols`**: `module.exports = ...` appears as `<unknown>` symbol names.
+- **`/workspace-symbols`**: Results are global and may include symbols from other projects, dependencies, and Markdown files in the workspace. Use the `folder` parameter to scope results.
+
+### General Notes
+- Optional fields (`kind`, `documentation`, `isPreferred`) may be absent from responses when the Language Server does not provide them.
+- Cross-file features degrade without proper project configuration (see Language-specific prerequisites).
+- **`_warning` field**: Cross-file endpoints (`/definition`, `/references`, `/implementation`, `/rename-preview`, `/call-hierarchy`) include a `_warning` string when no `jsconfig.json` or `tsconfig.json` is found for a JS/TS file. This signals that results may be limited to the current file.
 
 ## Configuration
 
-The default port is `3003`. If changed, find it in VS Code settings under `vscAgentBridge.port`.
+By default the extension picks a **random available port** (port `0`). The actual port is written to the discovery file at `~/.vsc-agent-bridge/<workspace-id>.json`.
+
+To use a fixed port, set `vscAgentBridge.port` in VS Code settings. Use `0` for automatic assignment (recommended for multi-instance support).

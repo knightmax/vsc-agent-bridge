@@ -21,6 +21,12 @@ vi.mock("vscode", () => ({
     getConfiguration: vi.fn(() => ({
       get: vi.fn((_key: string, def: unknown) => def),
     })),
+    workspaceFolders: [
+      { uri: { fsPath: "/test/workspace" }, name: "test", index: 0 },
+    ],
+    fs: {
+      stat: vi.fn(async () => ({ type: 1 })),
+    },
   },
   commands: {
     executeCommand: vi.fn(async () => []),
@@ -118,7 +124,7 @@ describe("HTTP server", () => {
   beforeAll(
     () =>
       new Promise<void>((resolve) => {
-        server = createServer(AUTH_TOKEN);
+        server = createServer(AUTH_TOKEN, ["/test/workspace"]);
         server.listen(0, "127.0.0.1", () => resolve());
       }),
   );
@@ -131,6 +137,48 @@ describe("HTTP server", () => {
   );
 
   // -- Auth ----------------------------------------------------------------
+
+  it("GET /info does not require auth", async () => {
+    const addr = server.address();
+    if (!addr || typeof addr === "string") {
+      throw new Error("Server not listening");
+    }
+
+    const { status, body } = await new Promise<{
+      status: number;
+      body: unknown;
+    }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: (addr as { port: number }).port,
+          method: "GET",
+          path: "/info",
+          // no x-auth-token header
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            const raw = Buffer.concat(chunks).toString("utf-8");
+            resolve({
+              status: res.statusCode ?? 0,
+              body: JSON.parse(raw),
+            });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.name).toBe("vsc-agent-bridge");
+    expect(obj.version).toBe("0.4.0");
+    expect(obj.pid).toBeTypeOf("number");
+    expect(obj.workspaceFolders).toEqual(["/test/workspace"]);
+  });
 
   it("rejects requests without auth token", async () => {
     const { status, body } = await request(server, {
@@ -191,9 +239,10 @@ describe("HTTP server", () => {
     expect(status).toBe(200);
     const obj = body as Record<string, unknown>;
     expect(obj.name).toBe("vsc-agent-bridge");
-    expect(obj.version).toBe("0.3.0");
+    expect(obj.version).toBe("0.4.0");
     expect(Array.isArray(obj.endpoints)).toBe(true);
     const endpoints = obj.endpoints as string[];
+    expect(endpoints).toContain("GET  /info");
     expect(endpoints).toContain("POST /references");
     expect(endpoints).toContain("POST /type-definition");
     expect(endpoints).toContain("POST /implementation");
@@ -582,6 +631,28 @@ describe("HTTP server", () => {
     expect(status).toBe(400);
     const obj = body as Record<string, unknown>;
     expect(obj.error).toMatch(/query/);
+  });
+
+  it("POST /workspace-symbols returns 400 for non-string folder", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/workspace-symbols",
+      body: JSON.stringify({ query: "Test", folder: 123 }),
+    });
+    expect(status).toBe(400);
+    const obj = body as Record<string, unknown>;
+    expect(obj.error).toMatch(/folder/);
+  });
+
+  it("POST /workspace-symbols accepts optional folder param", async () => {
+    const { status, body } = await request(server, {
+      method: "POST",
+      path: "/workspace-symbols",
+      body: JSON.stringify({ query: "Test", folder: "/some/path" }),
+    });
+    expect(status).toBe(200);
+    const obj = body as Record<string, unknown>;
+    expect(obj.symbols).toEqual([]);
   });
 
   // -- POST /completion (mocked empty) -------------------------------------

@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import * as http from "http";
 import * as crypto from "crypto";
+import * as os from "os";
+import * as nodePath from "path";
+import * as fs from "fs";
 
 import {
   type DiagnosticResponse,
@@ -31,6 +34,161 @@ import {
   parseFileParams,
   parseWorkspaceSymbolParams,
 } from "./helpers";
+
+// ---------------------------------------------------------------------------
+// Discovery file management
+// ---------------------------------------------------------------------------
+
+let discoveryFilePath: string | undefined;
+
+function getDiscoveryDir(): string {
+  return nodePath.join(os.homedir(), ".vsc-agent-bridge");
+}
+
+function getWorkspaceId(): string {
+  const folders = (vscode.workspace.workspaceFolders ?? [])
+    .map((f) => f.uri.fsPath)
+    .sort()
+    .join("\n");
+  if (folders.length === 0) {
+    return `pid-${process.pid}`;
+  }
+  return crypto
+    .createHash("sha256")
+    .update(folders)
+    .digest("hex")
+    .substring(0, 16);
+}
+
+function writeDiscoveryFile(port: number, token: string): void {
+  const dir = getDiscoveryDir();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const filePath = nodePath.join(dir, `${getWorkspaceId()}.json`);
+  discoveryFilePath = filePath;
+  const data = {
+    port,
+    token,
+    pid: process.pid,
+    version: "0.4.0",
+    workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
+      (f) => f.uri.fsPath,
+    ),
+    startedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+}
+
+function removeDiscoveryFile(): void {
+  if (!discoveryFilePath) {
+    return;
+  }
+  try {
+    fs.unlinkSync(discoveryFilePath);
+  } catch {
+    // File may not exist, ignore
+  }
+  discoveryFilePath = undefined;
+}
+
+/**
+ * Check if a file exists via the VS Code file system API.
+ */
+async function fileExists(uri: vscode.Uri): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(uri);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Strip VS Code internal `command:` links from markdown content.
+ * These links are not usable by external agents.
+ */
+function stripCommandLinks(content: string): string {
+  return content.replace(/\[([^\]]*)\]\(command:[^)]+\)/g, "$1");
+}
+
+// ---------------------------------------------------------------------------
+// Cross-file resolution warning helper
+// ---------------------------------------------------------------------------
+
+const JS_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".cjs"]);
+const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+
+function isJavaScriptFile(file: string): boolean {
+  return JS_EXTENSIONS.has(nodePath.extname(file).toLowerCase());
+}
+
+function isTypeScriptFile(file: string): boolean {
+  return TS_EXTENSIONS.has(nodePath.extname(file).toLowerCase());
+}
+
+/**
+ * Walk up from the given file's directory to find jsconfig.json or tsconfig.json.
+ * Returns true if one is found.
+ */
+function hasProjectConfig(file: string): boolean {
+  let dir = nodePath.dirname(file);
+  const root = nodePath.parse(dir).root;
+  while (dir !== root) {
+    if (
+      fs.existsSync(nodePath.join(dir, "jsconfig.json")) ||
+      fs.existsSync(nodePath.join(dir, "tsconfig.json"))
+    ) {
+      return true;
+    }
+    const parent = nodePath.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return false;
+}
+
+/**
+ * Return a warning string if the file is JS/TS and no jsconfig/tsconfig is found.
+ */
+function getCrossFileWarning(file: string): string | undefined {
+  if (!isJavaScriptFile(file) && !isTypeScriptFile(file)) {
+    return undefined;
+  }
+  if (hasProjectConfig(file)) {
+    return undefined;
+  }
+  return isJavaScriptFile(file)
+    ? "No jsconfig.json or tsconfig.json found. Cross-file resolution may be limited. See https://code.visualstudio.com/docs/languages/jsconfig."
+    : "No tsconfig.json found. Cross-file resolution may be limited.";
+}
+
+// ---------------------------------------------------------------------------
+// InlayHint kind heuristic
+// ---------------------------------------------------------------------------
+
+/**
+ * When the Language Server does not provide a kind, try to deduce it from the label.
+ * Labels ending with ":" are typically parameter hints; others are type hints.
+ */
+function deduceInlayHintKind(
+  kind: string | undefined,
+  label: string,
+): string | undefined {
+  if (kind !== undefined) {
+    return kind;
+  }
+  const trimmed = label.trim();
+  if (trimmed.endsWith(":") || trimmed.endsWith(": ")) {
+    return "Parameter";
+  }
+  if (trimmed.startsWith(":") || trimmed.startsWith(": ")) {
+    return "Type";
+  }
+  return undefined;
+}
 
 // ---------------------------------------------------------------------------
 // Serialization (depends on vscode types)
@@ -106,6 +264,10 @@ async function handlePostDefinition(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const locations = await vscode.commands.executeCommand<
@@ -149,7 +311,10 @@ async function handlePostDefinition(
     };
   });
 
-  sendJson(res, 200, { definitions });
+  sendJson(res, 200, {
+    definitions,
+    ...(getCrossFileWarning(file) ? { _warning: getCrossFileWarning(file) } : {}),
+  });
 }
 
 /**
@@ -169,6 +334,10 @@ async function handlePostHover(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
@@ -186,10 +355,10 @@ async function handlePostHover(
   for (const hover of hovers) {
     for (const content of hover.contents) {
       if (typeof content === "string") {
-        contents.push(content);
+        contents.push(stripCommandLinks(content));
       } else {
         // MarkdownString
-        contents.push(content.value);
+        contents.push(stripCommandLinks(content.value));
       }
     }
   }
@@ -238,6 +407,10 @@ async function handlePostReferences(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const locations = await vscode.commands.executeCommand<
@@ -263,7 +436,10 @@ async function handlePostReferences(
     },
   }));
 
-  sendJson(res, 200, { references });
+  sendJson(res, 200, {
+    references,
+    ...(getCrossFileWarning(file) ? { _warning: getCrossFileWarning(file) } : {}),
+  });
 }
 
 /**
@@ -283,6 +459,10 @@ async function handlePostTypeDefinition(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const locations = await vscode.commands.executeCommand<
@@ -345,6 +525,10 @@ async function handlePostImplementation(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const locations = await vscode.commands.executeCommand<
@@ -387,7 +571,10 @@ async function handlePostImplementation(
     };
   });
 
-  sendJson(res, 200, { implementations });
+  sendJson(res, 200, {
+    implementations,
+    ...(getCrossFileWarning(file) ? { _warning: getCrossFileWarning(file) } : {}),
+  });
 }
 
 /**
@@ -405,7 +592,12 @@ async function handlePostDocumentSymbols(
     return;
   }
 
-  const uri = vscode.Uri.file(parsed.params.file);
+  const { file } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
 
   const symbols = await vscode.commands.executeCommand<
     vscode.DocumentSymbol[] | vscode.SymbolInformation[] | undefined
@@ -543,6 +735,10 @@ async function handlePostSignatureHelp(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const help = await vscode.commands.executeCommand<
@@ -561,7 +757,10 @@ async function handlePostSignatureHelp(
         ? sig.documentation
         : sig.documentation?.value ?? "",
     parameters: sig.parameters.map((p) => ({
-      label: p.label,
+      label:
+        typeof p.label === "string"
+          ? p.label
+          : sig.label.substring(p.label[0], p.label[1]),
       documentation:
         typeof p.documentation === "string"
           ? p.documentation
@@ -595,6 +794,10 @@ async function handlePostRenamePreview(
 
   const { file, line, character, newName } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const edit = await vscode.commands.executeCommand<
@@ -627,7 +830,10 @@ async function handlePostRenamePreview(
     });
   }
 
-  sendJson(res, 200, { changes });
+  sendJson(res, 200, {
+    changes,
+    ...(getCrossFileWarning(file) ? { _warning: getCrossFileWarning(file) } : {}),
+  });
 }
 
 /**
@@ -647,6 +853,10 @@ async function handlePostDeclaration(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const locations = await vscode.commands.executeCommand<
@@ -756,6 +966,10 @@ async function handlePostCallHierarchy(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   // Step 1: Prepare the call hierarchy item(s)
@@ -800,6 +1014,7 @@ async function handlePostCallHierarchy(
     item: serializeCallHierarchyItem(item),
     incomingCalls,
     outgoingCalls,
+    ...(getCrossFileWarning(file) ? { _warning: getCrossFileWarning(file) } : {}),
   });
 }
 
@@ -821,6 +1036,10 @@ async function handlePostTypeHierarchy(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   // Step 1: Prepare the type hierarchy item(s)
@@ -881,8 +1100,9 @@ async function handlePostTypeHierarchy(
 /**
  * POST /workspace-symbols
  *
- * Body: { "query": "<search string>" }
+ * Body: { "query": "<search string>", "folder": "<optional folder path>" }
  * Search for symbols across the entire workspace.
+ * If `folder` is provided, results are filtered to symbols within that folder.
  */
 async function handlePostWorkspaceSymbols(
   body: string,
@@ -894,7 +1114,7 @@ async function handlePostWorkspaceSymbols(
     return;
   }
 
-  const { query } = parsed.params;
+  const { query, folder } = parsed.params;
 
   const symbols = await vscode.commands.executeCommand<
     vscode.SymbolInformation[] | undefined
@@ -905,24 +1125,38 @@ async function handlePostWorkspaceSymbols(
     return;
   }
 
-  const result: WorkspaceSymbolResponse[] = symbols.map((sym) => ({
-    name: sym.name,
-    kind: symbolKindToString(sym.kind),
-    containerName: sym.containerName ?? "",
-    location: {
-      uri: sym.location.uri.fsPath,
-      range: {
-        start: {
-          line: sym.location.range.start.line,
-          character: sym.location.range.start.character,
-        },
-        end: {
-          line: sym.location.range.end.line,
-          character: sym.location.range.end.character,
+  // Normalize the folder filter path (ensure trailing separator for prefix match)
+  const folderPrefix = folder
+    ? folder.endsWith(nodePath.sep)
+      ? folder
+      : folder + nodePath.sep
+    : undefined;
+
+  const result: WorkspaceSymbolResponse[] = [];
+  for (const sym of symbols) {
+    const symPath = sym.location.uri.fsPath;
+    if (folderPrefix && !symPath.startsWith(folderPrefix)) {
+      continue;
+    }
+    result.push({
+      name: sym.name,
+      kind: symbolKindToString(sym.kind),
+      containerName: sym.containerName ?? "",
+      location: {
+        uri: symPath,
+        range: {
+          start: {
+            line: sym.location.range.start.line,
+            character: sym.location.range.start.character,
+          },
+          end: {
+            line: sym.location.range.end.line,
+            character: sym.location.range.end.character,
+          },
         },
       },
-    },
-  }));
+    });
+  }
 
   sendJson(res, 200, { symbols: result });
 }
@@ -945,6 +1179,10 @@ async function handlePostCompletion(
 
   const { file, line, character } = parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const position = new vscode.Position(line, character);
 
   const completionResult = await vscode.commands.executeCommand<
@@ -1002,6 +1240,10 @@ async function handlePostInlayHints(
   const { file, startLine, startCharacter, endLine, endCharacter } =
     parsed.params;
   const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
   const range = new vscode.Range(
     new vscode.Position(startLine, startCharacter),
     new vscode.Position(endLine, endCharacter),
@@ -1016,17 +1258,20 @@ async function handlePostInlayHints(
     return;
   }
 
-  const result: InlayHintResponse[] = hints.map((hint) => ({
-    position: {
-      line: hint.position.line,
-      character: hint.position.character,
-    },
-    label:
+  const result: InlayHintResponse[] = hints.map((hint) => {
+    const label =
       typeof hint.label === "string"
         ? hint.label
-        : hint.label.map((part) => part.value).join(""),
-    kind: inlayHintKindToString(hint.kind),
-  }));
+        : hint.label.map((part) => part.value).join("");
+    return {
+      position: {
+        line: hint.position.line,
+        character: hint.position.character,
+      },
+      label,
+      kind: deduceInlayHintKind(inlayHintKindToString(hint.kind), label),
+    };
+  });
 
   sendJson(res, 200, { hints: result });
 }
@@ -1047,7 +1292,12 @@ async function handlePostFoldingRanges(
     return;
   }
 
-  const uri = vscode.Uri.file(parsed.params.file);
+  const { file } = parsed.params;
+  const uri = vscode.Uri.file(file);
+  if (!(await fileExists(uri))) {
+    sendJson(res, 404, { error: `File not found: '${file}'` });
+    return;
+  }
 
   const ranges = await vscode.commands.executeCommand<
     vscode.FoldingRange[] | undefined
@@ -1071,8 +1321,25 @@ async function handlePostFoldingRanges(
 // Server factory
 // ---------------------------------------------------------------------------
 
-export function createServer(authToken: string): http.Server {
+export function createServer(
+  authToken: string,
+  workspaceFolders: string[],
+): http.Server {
   const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", `http://localhost`);
+    const path = url.pathname;
+
+    // ----- Public endpoints (no auth required) -----
+    if (req.method === "GET" && path === "/info") {
+      sendJson(res, 200, {
+        name: "vsc-agent-bridge",
+        version: "0.4.0",
+        pid: process.pid,
+        workspaceFolders,
+      });
+      return;
+    }
+
     // ----- Auth check -----
     const token = req.headers["x-auth-token"];
     if (token !== authToken) {
@@ -1081,10 +1348,6 @@ export function createServer(authToken: string): http.Server {
       });
       return;
     }
-
-    // ----- Routing -----
-    const url = new URL(req.url ?? "/", `http://localhost`);
-    const path = url.pathname;
 
     try {
       if (req.method === "GET" && path === "/diagnostics") {
@@ -1197,8 +1460,9 @@ export function createServer(authToken: string): http.Server {
       if (req.method === "GET" && path === "/") {
         sendJson(res, 200, {
           name: "vsc-agent-bridge",
-          version: "0.3.0",
+          version: "0.4.0",
           endpoints: [
+            "GET  /info",
             "GET  /diagnostics",
             "POST /definition",
             "POST /declaration",
@@ -1241,7 +1505,7 @@ let server: http.Server | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = vscode.workspace.getConfiguration("vscAgentBridge");
-  const port = config.get<number>("port", 3003);
+  const port = config.get<number>("port", 0);
   const configuredToken = config.get<string>("authToken", "");
 
   // Use the configured token, or generate a random one.
@@ -1250,20 +1514,26 @@ export function activate(context: vscode.ExtensionContext): void {
       ? configuredToken
       : crypto.randomBytes(24).toString("hex");
 
-  server = createServer(authToken);
+  const workspaceFolders = (vscode.workspace.workspaceFolders ?? []).map(
+    (f) => f.uri.fsPath,
+  );
+
+  server = createServer(authToken, workspaceFolders);
 
   server.listen(port, "127.0.0.1", () => {
-    const message = `Agent Bridge server listening on http://127.0.0.1:${port}`;
+    const addr = server?.address();
+    const actualPort = typeof addr === "object" && addr ? addr.port : port;
+    const message = `Agent Bridge server listening on http://127.0.0.1:${actualPort}`;
     vscode.window.showInformationMessage(message);
     console.log(message);
-    // Token is available via the "Agent Bridge: Copy Auth Token to Clipboard" command.
-    // It is intentionally NOT logged to avoid accidental exposure.
+    // Write the discovery file so agents can find this instance.
+    writeDiscoveryFile(actualPort, authToken);
   });
 
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
       vscode.window.showErrorMessage(
-        `Agent Bridge: port ${port} is already in use. Change it in settings (vscAgentBridge.port).`,
+        `Agent Bridge: port ${port} is already in use. Change it in settings (vscAgentBridge.port) or use 0 for automatic assignment.`,
       );
     } else {
       vscode.window.showErrorMessage(
@@ -1272,7 +1542,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  // Register a command to display the auth token on demand.
+  // Register a command to copy auth token.
   const showTokenCmd = vscode.commands.registerCommand(
     "vscAgentBridge.showAuthToken",
     () => {
@@ -1283,9 +1553,28 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
 
-  context.subscriptions.push(showTokenCmd);
+  // Register a command to copy full connection info.
+  const copyConnectionInfoCmd = vscode.commands.registerCommand(
+    "vscAgentBridge.copyConnectionInfo",
+    () => {
+      const addr = server?.address();
+      const actualPort = typeof addr === "object" && addr ? addr.port : port;
+      const info = JSON.stringify(
+        { url: `http://127.0.0.1:${actualPort}`, token: authToken },
+        null,
+        2,
+      );
+      vscode.env.clipboard.writeText(info);
+      vscode.window.showInformationMessage(
+        `Agent Bridge connection info copied to clipboard (port ${actualPort}).`,
+      );
+    },
+  );
+
+  context.subscriptions.push(showTokenCmd, copyConnectionInfoCmd);
   context.subscriptions.push({
     dispose: () => {
+      removeDiscoveryFile();
       if (server) {
         server.close();
         server = undefined;
@@ -1295,6 +1584,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+  removeDiscoveryFile();
   if (server) {
     server.close();
     server = undefined;
